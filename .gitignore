@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Local environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Operating-system and editor metadata
+.DS_Store
+**/.DS_Store
+.vscode/
+.idea/
+
+# Local logs, runtime data, and temporary QA captures
+*.log
+.qa*
+coverage/
+
+# Source distribution archives and engine-specific sample packages.
+# Runtime-ready files are already extracted under assets/ and are tracked.
+assets/*.zip
+assets/kenney_particle-pack/Unity samples/
+
+# Optional local ranking storage
+leaderboard.json
+
+# Local AI assistant configuration
+.claude/

@@ -1,0 +1,5 @@
+# Pilot Portraits
+
+The five active in-game pilot portraits were newly generated on 2026-08-26 for this project. They are original visual assets created for BOWIE, THORNE, VEGA, NOVA, and KIT.
+
+All former portrait image files and their work copies have been deleted at the project owner's request.

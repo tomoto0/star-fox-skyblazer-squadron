@@ -1,0 +1,7 @@
+Textures sourced from Poly Haven (https://polyhaven.com) — all CC0 (public domain).
+No attribution required; credited here as courtesy.
+  rock_diff.jpg   — rocks_ground_02
+  sand_diff.jpg   — sand_02
+  snow_diff.jpg   — snow_02
+  metal_diff.jpg  — metal_plate
+Downloaded 1K JPEG diffuse, downscaled to 512 for runtime.

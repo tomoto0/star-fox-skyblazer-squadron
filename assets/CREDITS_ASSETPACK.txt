@@ -1,0 +1,204 @@
+CC0 ASSET PACK — integrated 2026-07-21
+All assets below are CC0 1.0 (public domain), usable in commercial projects.
+
+particles/   — Kenney "Particle Pack" (Kenney.nl, CC0). fire/smoke/spark/flame/muzzle/flare/light/scorch/star billboards.
+models/debris/ — Kenney "Space Kit" (Kenney.nl, CC0). meteor_half, meteor, rocks, rock_crystals, weapon_gun, machine_barrel — used as flung wreckage fragments on kills.
+backgrounds/ — Poly Haven HDRIs, tone-mapped & downscaled to 3072px equirectangular JPEG (CC0):
+  sky_sunset.jpg  = qwantani_sunset_puresky        (AZURE SEA / EMBER CANYON)
+  sky_day.jpg     = kloofendal_48d_partly_cloudy   (CASCADE GORGE)
+  sky_desert.jpg  = valley_of_desolation           (DUNE SEA)
+
+Source pack: starfox_rail_shooter_CC0_asset_pack.zip + kenney_particle-pack + kenney_space-kit.
+No Nintendo / Star Fox IP is included; all models are generic genre assets.
+
+--- v10 additions ---
+models/props/ — Kenney "Space Kit" (CC0): hangars, turrets, satellite dishes, generator, rocket, rock/crystal formations, small craft — placed as scrolling flank/background facilities & landmarks (src/world/props.js).
+models/ships/ — Quaternius "Ultimate Spaceships" (CC0): Striker, Executioner, Omen, Insurgent — placed as parked/cruising enemy-craft landmarks. Self-contained glTF (embedded buffers).
+Sky reflections: Poly Haven HDRIs (backgrounds/) are converted to PMREM environment maps for the metal MeshStandard props/ships/debris only.
+
+--- enemy/ally expansion pack (starfox_enemy_ally_CC0_expansion.zip) ---
+models/expansion/ — all CC0, license texts in models/expansion/LICENSES/:
+  Quaternius Sci-Fi Essentials : Enemy_EyeDrone / Enemy_QuadShell / Enemy_Trilobite (+ T_Enemies_* texture atlases)
+  Quaternius Ultimate Space Kit: Enemy_Flying / Enemy_Large / Spaceship_RaeTheRedPanda (embedded buffers)
+  Kenney Pirate Kit           : cannon / cannon-mobile / ship-large / ship-pirate-large (+ Textures/colormap.png)
+Mapped to enemy types: scout, fighter, quadtank, trilobite, cannon, shorecannon, gunboat, frigate, mech;
+Spaceship_RaeTheRedPanda is the TEMPEST RAY boss hull.
+
+--- v17 external CC0 expansion ---
+models/external/ — Polygonal Mind collections via ToxSam’s CC0 asset registry (CC0 1.0):
+  aero_airship.glb        = Aero System / Aero_Airship_01 — SKYRAIDER mobile relay carrier
+  scifi_drone.glb         = Crystal Crossroads / SciFi_Drone — RELAYDRONE escort enemy
+  aero_station_ring.glb   = Aero System / Aero_Station_Ring_Art — orbital relay landmark
+  scifi_antenna.glb       = Crystal Crossroads / SciFi_Antenna — flank-base landmark
+  scifi_bridge.glb        = Crystal Crossroads / SciFi_Bridge — flank-base landmark
+  scifi_machine.glb       = Crystal Crossroads / SciFi_Machine — flank-base landmark
+Registry: https://github.com/ToxSam/open-source-3D-assets (individual selected collections are CC0).
+Integrated in src/entities/shipFactory.js, src/entities/enemies.js, and src/world/props.js.
+
+--- v19 web BGM integration ---
+assets/audio/music/ — high-quality full-length MP3s downloaded from Scott Buckley's official CC BY 4.0 library:
+  title.mp3   = 'Neon' — https://www.scottbuckley.com.au/library/neon/
+  sea.mp3     = 'Electric Dreams' — https://www.scottbuckley.com.au/library/electric-dreams/
+  gorge.mp3   = 'Aphelion' — https://www.scottbuckley.com.au/library/aphelion/
+  ember.mp3   = 'Machina' — https://www.scottbuckley.com.au/library/machina/
+  dune.mp3    = 'Legacy' — https://www.scottbuckley.com.au/library/legacy/
+  boss.mp3    = 'Simulacra' — https://www.scottbuckley.com.au/library/simulacra/
+  victory.mp3 = 'Starfire' — https://www.scottbuckley.com.au/library/starfire/
+  ending_majestic.mp3 = 'Age of Wonder' — https://www.scottbuckley.com.au/library/age-of-wonder/
+  Required attribution: 'TRACK TITLE' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au
+  License: https://creativecommons.org/licenses/by/4.0/
+  All prior generated BGM files were removed and are not used by the game.
+assets/audio/sfx/ — selected files from Kenney “Sci-fi Sounds” 1.0 (CC0):
+  laserRetro_001.ogg, laserLarge_003.ogg, explosionCrunch_003.ogg,
+  lowFrequency_explosion_000.ogg, impactMetal_002.ogg, forceField_002.ogg.
+  Source: https://kenney.nl/assets/sci-fi-sounds
+  License: CC0 1.0 https://creativecommons.org/publicdomain/zero/1.0/
+Integrated by src/core/audio.js with WebAudio looping, gain fades, and synthesized-sound fallback.
+
+--- v44 majestic ending score and debrief background ---
+assets/audio/music/ending_majestic.mp3 — 'Age of Wonder' by Scott Buckley.
+  Official source: https://www.scottbuckley.com.au/library/age-of-wonder/
+  License: CC BY 4.0 https://creativecommons.org/licenses/by/4.0/
+  Required attribution: 'Age of Wonder' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au
+  Downloaded from the official full-mix MP3 link; used only for the post-clear final debrief.
+assets/concept/ending_debrief.jpg — original generated final-score background, 1920x1080 progressive JPEG.
+  Used by css/style.css as the background for #ending-screen. No third-party image attribution required.
+
+--- v20 zone far-background integration ---
+assets/backgrounds/ — equirectangular far-background photos downloaded from Poly Haven, CC0:
+  sky_sea.jpg     = Small Harbour Sunset — AZURE SEA — https://polyhaven.com/a/small_harbour_sunset
+  sky_day.jpg     = Harties Cliff View — CASCADE GORGE — https://polyhaven.com/a/harties_cliff_view
+  sky_sunset.jpg  = Rogland Sunset — EMBER CANYON — https://polyhaven.com/a/rogland_sunset
+  sky_desert.jpg  = Goegap — DUNE SEA — https://polyhaven.com/a/goegap
+  License: CC0 1.0 https://creativecommons.org/publicdomain/zero/1.0/
+  Original backgrounds are retained under assets/backgrounds/original/ for restoration.
+Integrated through src/world/sky.js and src/world/palettes.js. The background dome cross-fades each zone image over the existing stylized colour and cloud layers.
+
+--- v21 high-detail landscape and combat design ---
+models/hero/ — optimized from official Poly Haven CC0 glTF scans:
+  hero_coast_rock.glb  = Coast Rocks 03 by Rico Cilliers and Rob Tuytel — https://polyhaven.com/a/coast_rocks_03
+  hero_desert_rock.glb = Coast Rocks 05 by Rob Tuytel — https://polyhaven.com/a/coast_rocks_05
+  Both use the CC0 1.0 license. Source scans were reduced for distant-landmark use and their textures were compressed to WebP.
+Zone megasites, enemy combat frames, boss hardware, and weapon visual effects are original Three.js geometry authored for this project.
+Integrated through src/world/props.js, src/entities/shipFactory.js, src/entities/bosses.js, and src/entities/projectiles.js.
+
+--- v22 graded missile-launch audio ---
+assets/audio/sfx/missile_launch_mk1.ogg, missile_launch_mk2.ogg, missile_launch_mk3.ogg
+  = edited short-form launch variants made from these CC0 1.0 source sounds:
+    missile.wav — “Missile sound” by mikeask
+      https://opengameart.org/content/missile-sound
+    launch.wav — “Rocket launch” by qubodup
+      https://opengameart.org/content/rocket-launch
+  License: CC0 1.0 https://creativecommons.org/publicdomain/zero/1.0/
+  MK-I uses the compact missile ignition; MK-II uses the lower rocket ignition;
+  MK-III layers both sources with a lower-pitched heavy-burn tail. Trim, EQ,
+  loudness normalization, fades, pitch adjustment, and mixing were performed for
+  responsive in-game use. Integrated through src/core/audio.js and src/game/game.js.
+
+--- v25 Afterburner campaign expansion ---
+The following pre-existing Quaternius Ultimate Spaceships CC0 1.0 models, already
+included under models/ships/, are now assigned to new combat content:
+  challenger.gltf = HARRIER dive-bomber enemy
+  spitfire.gltf   = PHANTOM phase-interceptor enemy
+  insurgent.gltf  = DREADWING command carrier and OBSIDIAN MATRIARCH boss hull
+The pre-existing ToxSam / Polygonal Mind CC0 1.0 asset
+  external/aero_station_ring.glb
+is now used as the RIFT HARBINGER boss hull. Its source and CC0 license are
+recorded in the v17 section above. The campaign reuses the licensed Scott Buckley
+EMBER, DUNE, and BOSS tracks already documented in v19; no newly downloaded music
+or third-party material was required for this expansion.
+Integrated through src/entities/shipFactory.js, src/entities/enemies.js,
+src/entities/bosses.js, src/game/waves.js, and src/world/palettes.js.
+
+--- v26 environment, comms, and UI expansion ---
+assets/textures/coastal_cliff_04/ — Poly Haven Coastal Cliff 04 by Rico Cilliers
+and Rob Tuytel: 1K diffuse, normal(GL), and ARM maps. CC0 1.0.
+Source: https://polyhaven.com/a/coastal_cliff_04
+The source asset's high-poly scan is not shipped. The 1K diffuse and normal(GL)
+maps are applied to original procedural buttressed cliffs and rift-islet geometry
+in src/world/terrain.js; the accompanying ARM map is retained with the source set.
+
+assets/audio/voice/ — selected OGG clips from Kenney “Voiceover Pack” via
+OpenGameArt: mission_completed, objective_achieved, war_watch_my_back,
+war_cover_me, war_target_engaged, war_target_destroyed. CC0 1.0.
+Source: https://opengameart.org/content/voiceover-pack-40-lines
+Used as short command-radio reinforcement for readable rescue, ally-volley,
+wave-transition, and mission-complete events. Credit to Kenney.nl is retained
+although attribution is not required by CC0.
+
+assets/ui/kenney-space/ — selected frame and crosshair PNGs from Kenney “UI Pack
+- Sci-Fi” (130 elements). CC0 1.0.
+Source: https://kenney.nl/assets/ui-pack-sci-fi
+Used by the original CSS communications cut-in design; no unmodified third-party
+UI screen is presented as a game screen.
+
+Reference-only source evaluated but not copied into the shipping asset tree:
+OpenGameArt “60 CC0 Sci-Fi SFX” by rubberduck, CC0 1.0.
+https://opengameart.org/content/60-cc0-sci-fi-sfx
+
+All v26 geometry, event logic, visual compositions, and UI implementation are
+original Three.js / CSS work authored for this project.
+
+License: CC0 1.0 https://creativecommons.org/publicdomain/zero/1.0/
+
+--- v27 zone-specific cliff materials ---
+assets/textures/zone_cliffs/gorge/ — Poly Haven Cliff Side by Dario Barresi,
+James Ray Cock, and Jenelle van Heerden: 1K Diffuse and Normal(GL). CC0 1.0.
+Source: https://polyhaven.com/a/cliff_side
+Used by original procedural CASCADE GORGE buttressed cliffs to provide warm,
+eroded, visibly layered sedimentary rock.
+
+assets/textures/zone_cliffs/ember/ — Poly Haven Dark Rock by Amal Kumar:
+1K Diffuse and Normal(GL). CC0 1.0.
+Source: https://polyhaven.com/a/dark_rock
+Used by original procedural EMBER CANYON buttressed cliffs and Rift Islets to
+provide dark fractured volcanic rock under the zone's red lava illumination.
+
+assets/textures/zone_cliffs/dune/ — Poly Haven Rocky Trail by Amal Kumar:
+1K Diffuse and Normal(GL). CC0 1.0.
+Source: https://polyhaven.com/a/rocky_trail
+Used by original procedural DUNE SEA buttressed cliffs and Rift Islets to provide
+dusty, weathered, warm sandstone-and-gravel surface detail.
+
+AZURE SEA continues to use the v26 Coastal Cliff 04 set by Rico Cilliers and Rob
+Tuytel, CC0 1.0, as blue-grey wet sea-cut stone. All v27 rock geometry and
+zone-specific material implementation remain original Three.js work.
+
+License: CC0 1.0 https://creativecommons.org/publicdomain/zero/1.0/
+
+--- v28 zone-specific skyboxes and floor surfaces ---
+assets/skyboxes/sea_harbour_sunset_1k.hdr — Poly Haven Small Harbour Sunset,
+photography by Greg Zaal and processing by Jarod Guest. CC0 1.0.
+Source: https://polyhaven.com/a/small_harbour_sunset
+Used as the AZURE SEA equirectangular HDR skybox.
+
+assets/skyboxes/gorge_valley_1k.hdr — Poly Haven Valley Of Desolation. CC0 1.0.
+Source: https://polyhaven.com/a/valley_of_desolation
+Used as the CASCADE GORGE equirectangular HDR skybox.
+
+assets/skyboxes/ember_industrial_sunset_1k.hdr — Poly Haven Industrial Sunset 02
+(Pure Sky). CC0 1.0.
+Source: https://polyhaven.com/a/industrial_sunset_02_puresky
+Used as the EMBER CANYON equirectangular HDR skybox; original in-game lava
+palette supplies the red-violet volcanic atmosphere.
+
+assets/skyboxes/dune_goegap_1k.hdr — Poly Haven Goegap. CC0 1.0.
+Source: https://polyhaven.com/a/goegap
+Used as the DUNE SEA equirectangular HDR skybox.
+
+assets/textures/zone_floors/gorge/ — Poly Haven Rocky Terrain 03: 1K Diffuse and
+Normal(GL). CC0 1.0. Source: https://polyhaven.com/a/rocky_terrain_03
+Available as the original rocky ground material for the CASCADE GORGE terrain
+layer; its visible river surface uses the original low-cost gorge water map.
+
+assets/textures/zone_floors/dune/ — Poly Haven Sand 01: 1K Diffuse and
+Normal(GL). CC0 1.0. Source: https://polyhaven.com/a/sand_01
+Used by the original procedural DUNE SEA floor geometry.
+
+AZURE SEA and CASCADE GORGE use different original 256px CanvasTexture water
+surfaces so their animated floors remain lightweight and distinct. EMBER CANYON
+uses its CC0 Dark Rock surface as a separately configured high-repeat volcanic
+floor. All water animation, ground geometry, texture routing, visual treatment,
+and game implementation remain original project work.
+
+License: CC0 1.0 https://creativecommons.org/publicdomain/zero/1.0/

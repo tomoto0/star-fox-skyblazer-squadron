@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STAR FOX — SKYBLAZER SQUADRON</title>
+<!-- SOCIAL_META: server.mjs injects absolute OGP and X Card tags for every HTML response. -->
+<link rel="stylesheet" href="./css/style.css?v=rankings-v48">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./node_modules/three/build/three.module.js",
+    "three/addons/": "./node_modules/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+
+  <!-- ===================== IN-GAME HUD ===================== -->
+  <div id="hud" class="hidden">
+    <!-- top left : pilot status -->
+    <div id="pilot-panel">
+      <div id="portrait-frame"><img src="./assets/ui/portrait_bowie.png" alt="Bowie"></div>
+      <div id="pilot-bars">
+        <div class="bar" id="bar-hp"><div class="bar-fill" id="bar-hp-fill"></div></div>
+        <div class="bar" id="bar-boost"><div class="bar-fill" id="bar-boost-fill"></div></div>
+        <div id="pips-row">
+          <div id="laser-pips"></div>
+          <div id="bomb-gems"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- left : wingmate status -->
+    <div id="wing-status" class="hidden"></div>
+
+    <!-- top right : score + lives -->
+    <div id="score-panel">
+      <div id="score">0000</div>
+      <div id="lives"><span class="ship-icon">✈</span><span id="lives-num">x 3</span></div>
+    </div>
+
+    <!-- boss bar -->
+    <div id="boss-bar" class="hidden">
+      <div id="boss-head">
+        <div id="boss-skull">☠</div>
+        <div id="boss-name">BOSS</div>
+        <div id="boss-phase"><span></span><span></span><span></span></div>
+      </div>
+      <div id="boss-track">
+        <div id="boss-fill"></div>
+        <div id="boss-fill-lag"></div>
+        <div id="boss-ticks"></div>
+      </div>
+    </div>
+
+    <!-- center banner -->
+    <div id="wave-banner" class="hidden">
+      <div id="wave-banner-top">WAVE 1</div>
+      <div id="wave-banner-sub">AZURE SEA</div>
+    </div>
+
+    <!-- alerts -->
+    <div id="alert-banner" class="hidden">⚠ INCOMING</div>
+
+    <!-- item pickup callout -->
+    <div id="callout" class="hidden"><span id="callout-icon">◆</span><span id="callout-text">LASER UP</span></div>
+
+    <!-- combo counter -->
+    <div id="combo" class="hidden"><b id="combo-x">x2</b><span>COMBO</span></div>
+
+    <!-- rival off-screen tracker -->
+    <div id="rival-marker" class="hidden"><svg viewBox="0 0 40 40"><path d="M20 4 L34 32 L20 24 L6 32 Z"/></svg><span>THORNE</span></div>
+
+    <!-- dialogue -->
+    <div id="dialogue" class="hidden">
+      <div id="dlg-portrait"><img id="dlg-img" src="./assets/ui/portrait_thorne.png" alt=""></div>
+      <div id="dlg-box">
+        <div id="dlg-name">Thorne</div>
+        <div id="dlg-panel"><span id="dlg-text"></span></div>
+      </div>
+    </div>
+
+    <!-- reticles (star-fox double reticle) -->
+    <svg id="reticle-far" class="reticle" viewBox="0 0 100 100">
+      <path d="M20 8 h-8 a4 4 0 0 0 -4 4 v8 M80 8 h8 a4 4 0 0 1 4 4 v8 M20 92 h-8 a4 4 0 0 1 -4 -4 v-8 M80 92 h8 a4 4 0 0 0 4 -4 v-8" />
+    </svg>
+    <svg id="reticle-near" class="reticle" viewBox="0 0 100 100">
+      <path d="M28 6 h-14 a8 8 0 0 0 -8 8 v14 M72 6 h14 a8 8 0 0 1 8 8 v14 M28 94 h-14 a8 8 0 0 1 -8 -8 v-14 M72 94 h14 a8 8 0 0 0 8 -8 v-14" />
+      <line x1="50" y1="44" x2="50" y2="56"/><line x1="44" y1="50" x2="56" y2="50"/>
+    </svg>
+    <div id="lock-markers"></div>
+
+    <!-- charge meter under reticle -->
+    <div id="charge-ring" class="hidden"><svg viewBox="0 0 60 60"><circle class="cbg" cx="30" cy="30" r="24"/><circle class="cfg" id="charge-arc" cx="30" cy="30" r="24"/></svg></div>
+
+    <!-- screen fx -->
+    <div id="vignette"></div>
+    <div id="hurt-flash"></div>
+    <div id="white-flash"></div>
+  </div>
+
+  <!-- ===================== MENUS ===================== -->
+  <div id="title-screen">
+    <div class="title-stack">
+      <div id="title-logo">
+        <span class="logo-star">STAR</span><span class="logo-fox">FOX</span>
+      </div>
+      <div id="title-sub">SKYBLAZER SQUADRON</div>
+      <div id="title-press" class="blink">PRESS ENTER / CLICK TO START</div>
+      <div id="title-controls">
+        <div class="ctl"><b>MOVE</b> WASD / ARROWS / MOUSE</div>
+        <div class="ctl"><b>FIRE</b> SPACE / CLICK &nbsp;<b>CHARGE LOCK-ON</b> HOLD C / RIGHT-CLICK</div>
+        <div class="ctl"><b>BARREL ROLL</b> ⌘ CMD + ← / → &nbsp;— deflects enemy fire</div>
+        <div class="ctl"><b>BOOST</b> SHIFT &nbsp;<b>BRAKE</b> CTRL</div>
+        <div class="ctl"><b>BOMB</b> B to launch &nbsp;·&nbsp; B again = BIG detonation 💥</div>
+        <div class="ctl"><b>PAUSE</b> P &nbsp;<b>MUTE</b> M</div>
+      </div>
+      <div id="title-unlock" class="hidden">AFTERBURNER+ UNLOCKED &nbsp;·&nbsp; PRESS <b>Q</b> FOR SIGNAL ARCHIVE</div>
+      <button type="button" id="title-ranking-button" aria-haspopup="dialog" aria-controls="leaderboard-screen">
+        <span class="title-ranking-mark">✦</span><span>PILOT RANKINGS</span><small>TOP 30 &nbsp;·&nbsp; PRESS R</small>
+      </button>
+    </div>
+    <div id="title-foot">WAVE 1 – 16 &nbsp;·&nbsp; 4 COMBAT ZONES &nbsp;·&nbsp; 6 BOSSES</div>
+  </div>
+
+  <div id="leaderboard-screen" class="hidden" aria-hidden="true">
+    <section class="leaderboard-frame" role="dialog" aria-modal="true" aria-labelledby="leaderboard-title">
+      <div class="leaderboard-scanline"></div>
+      <header class="leaderboard-header">
+        <div class="leaderboard-kicker">SKYBLAZER FLIGHT NETWORK</div>
+        <h1 id="leaderboard-title">PILOT RANKINGS</h1>
+        <div class="leaderboard-sub">TOP 30 &nbsp;·&nbsp; LOCAL FLIGHT RECORDS</div>
+      </header>
+      <div class="leaderboard-status"><span>LIVE FLIGHT LOG</span><b id="leaderboard-count">0 / 30 ENTRIES</b></div>
+      <div class="leaderboard-table-wrap" tabindex="0" aria-label="上位30位のスコアランキング">
+        <table class="leaderboard-table">
+          <thead><tr><th scope="col">RANK</th><th scope="col">PILOT</th><th scope="col">SCORE</th><th scope="col">RUN</th></tr></thead>
+          <tbody id="leaderboard-body"></tbody>
+        </table>
+        <div id="leaderboard-empty" class="leaderboard-empty">NO FLIGHT RECORDS YET<br><span>THE SKY IS WAITING FOR ITS FIRST ACE.</span></div>
+      </div>
+      <footer class="leaderboard-foot"><span>RECORDS ARE SAVED ON THIS DEVICE</span><button type="button" id="leaderboard-close">RETURN TO TITLE <b>ESC</b></button></footer>
+    </section>
+  </div>
+
+  <div id="rank-entry-screen" class="hidden" aria-hidden="true">
+    <section class="rank-entry-frame" role="dialog" aria-modal="true" aria-labelledby="rank-entry-title">
+      <div class="rank-entry-kicker">TOP 30 SIGNAL DETECTED</div>
+      <h1 id="rank-entry-title">NEW FLIGHT RECORD</h1>
+      <div class="rank-entry-score"><span>FINAL SCORE</span><b id="rank-entry-score">000000</b></div>
+      <p id="rank-entry-copy">Your sortie is projected to enter the Pilot Rankings.</p>
+      <label for="rank-entry-name">REGISTER CALLSIGN <span>MAX 14</span></label>
+      <input id="rank-entry-name" type="text" maxlength="14" autocomplete="nickname" autocapitalize="characters" spellcheck="false" placeholder="ENTER CALLSIGN" aria-describedby="rank-entry-copy">
+      <div class="rank-entry-actions">
+        <button type="button" id="rank-entry-submit">REGISTER SCORE</button>
+        <button type="button" id="rank-entry-skip">NOT NOW</button>
+      </div>
+      <div class="rank-entry-note">LOCAL FLIGHT LOG &nbsp;·&nbsp; CLOUD SYNC READY</div>
+    </section>
+  </div>
+
+  <!-- clear-data modes: only shown after the first completed campaign -->
+  <div id="mode-screen" class="hidden">
+    <div class="mode-kicker">CLEAR DATA DETECTED // SELECT SORTIE</div>
+    <div class="mode-title">AFTERBURNER ACCESS</div>
+    <div class="mode-cards">
+      <div class="mode-card" data-mode="standard">
+        <div class="mode-key">1 / ←</div><div class="mode-name">STANDARD REDEPLOY</div>
+        <div class="mode-desc">Begin at WAVE 1. Full campaign progression and standard loadout.</div>
+      </div>
+      <div class="mode-card ace" data-mode="afterburner">
+        <div class="mode-key">2 / →</div><div class="mode-name">AFTERBURNER+</div>
+        <div class="mode-desc">Redeploy at WAVE 13 with Hyper Laser, 5 bombs, and the unlocked veteran route.</div>
+      </div>
+    </div>
+    <div class="mode-foot">USE 1 / 2 OR ARROW KEYS &nbsp;·&nbsp; ESC TO CANCEL</div>
+  </div>
+
+  <!-- deliberately quiet hidden screen: appears through Q after a clear -->
+  <div id="archive-screen" class="hidden">
+    <div class="archive-frame">
+      <div class="archive-kicker">CLASSIFIED // SKYBLAZER SIGNAL ARCHIVE</div>
+      <div class="archive-title">RIFT ECHO LOG</div>
+      <div id="archive-record">CLEAR RECORD // 0 SORTIES</div>
+      <div class="archive-line"></div>
+      <p id="archive-text">No echo recovered.</p>
+      <div class="archive-hint">PRESS ENTER OR Q TO RETURN</div>
+    </div>
+  </div>
+
+  <div id="wave-results" class="menu-card hidden">
+    <div class="mc-title" id="res-title">WAVE 1 CLEAR</div>
+    <div class="mc-rows">
+      <div class="mc-row"><span>ENEMIES DOWN</span><b id="res-kills">0</b></div>
+      <div class="mc-row"><span>ACCURACY</span><b id="res-acc">0%</b></div>
+      <div class="mc-row"><span>RINGS</span><b id="res-rings">0</b></div>
+      <div class="mc-row total"><span>WAVE BONUS</span><b id="res-bonus">+0</b></div>
+    </div>
+    <div class="mc-foot blink">NEXT WAVE INCOMING…</div>
+  </div>
+
+  <div id="gameover-screen" class="menu-card hidden">
+    <div class="mc-title red">MISSION FAILED</div>
+    <div class="mc-rows">
+      <div class="mc-row"><span>FINAL SCORE</span><b id="go-score">0</b></div>
+      <div class="mc-row"><span>REACHED</span><b id="go-wave">WAVE 1</b></div>
+    </div>
+    <div class="mc-foot blink">PRESS ENTER TO RETRY</div>
+  </div>
+
+  <div id="victory-screen" class="menu-card hidden">
+    <div class="mc-title gold">MISSION COMPLETE</div>
+    <div class="mc-rows">
+      <div class="mc-row"><span>FINAL SCORE</span><b id="vic-score">0</b></div>
+      <div class="mc-row"><span>TOTAL KILLS</span><b id="vic-kills">0</b></div>
+      <div class="mc-row"><span>ACCURACY</span><b id="vic-acc">0%</b></div>
+    </div>
+    <div class="mc-foot">THE LYLAT COAST IS SAFE. &nbsp;GREAT FLYING, BOWIE!</div>
+    <div class="mc-foot blink">PRESS ENTER FOR TITLE</div>
+  </div>
+
+  <!-- final-boss epilogue: staged over the surviving 3D scene -->
+  <div id="ending-screen" class="hidden" aria-live="polite">
+    <div class="ending-vignette"></div>
+    <div class="ending-stars"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="ending-header">SKYBLAZER SQUADRON // FINAL DEBRIEF</div>
+    <div class="ending-track">HOMEWARD SIGNAL // ORCHESTRAL DEBRIEF</div>
+    <div class="ending-stamp">MISSION COMPLETE</div>
+    <div class="ending-subtitle">RIFT CITADEL CLOSED</div>
+    <div class="ending-comms">
+      <div class="ending-pilot"><img src="./assets/ui/portrait_vega.png" alt="Vega"><span>VEGA</span></div>
+      <div class="ending-pilot"><img src="./assets/ui/portrait_nova.png" alt="Nova"><span>NOVA</span></div>
+      <div class="ending-pilot leader"><img src="./assets/ui/portrait_bowie.png" alt="Bowie"><span>BOWIE</span></div>
+      <div class="ending-pilot"><img src="./assets/ui/portrait_kit.png" alt="Kit"><span>KIT</span></div>
+    </div>
+    <div class="ending-message"><b>REX //</b> RIFT SIGNATURE COLLAPSED. SQUADRON, FORM UP FOR HOME.</div>
+    <div class="ending-rule"></div>
+    <div class="ending-stats">
+      <div><span>FINAL SCORE</span><b id="end-score">000000</b></div>
+      <div><span>HOSTILES DOWN</span><b id="end-kills">000</b></div>
+      <div><span>FLIGHT ACCURACY</span><b id="end-acc">0%</b></div>
+    </div>
+    <div class="ending-epilogue">THE DUNE SEA IS QUIET. THE COAST IS SAFE. <em>GREAT FLYING, BOWIE.</em></div>
+    <div id="ending-unlock" class="ending-unlock">AFTERBURNER+ // VETERAN ROUTE UNLOCKED</div>
+    <div class="ending-prompt blink">PRESS ENTER TO RETURN TO TITLE</div>
+  </div>
+
+  <div id="pause-screen" class="hidden"><div id="pause-box">PAUSED<br><span>press P to resume</span></div></div>
+
+  <!-- touch controls: visible only during mobile gameplay -->
+  <div id="touch-controls" class="hidden" aria-label="モバイル操作">
+    <div id="touch-stick" class="touch-stick" aria-label="機体移動">
+      <div class="touch-stick-ring"></div>
+      <div id="touch-stick-knob" class="touch-stick-knob"></div>
+    </div>
+    <div class="touch-actions" aria-label="戦闘操作">
+      <button type="button" class="touch-button touch-lock" data-touch="KeyC" aria-label="チャージロックオン"><span>LOCK</span></button>
+      <button type="button" class="touch-button touch-bomb" data-touch="KeyB" aria-label="ボム"><span>BOMB</span></button>
+      <button type="button" class="touch-button touch-fire" data-touch="Space" aria-label="連射"><span>FIRE</span></button>
+      <button type="button" class="touch-button touch-boost" data-touch="ShiftLeft" aria-label="ブースト"><span>BOOST</span></button>
+      <button type="button" class="touch-button touch-brake" data-touch="ControlLeft" aria-label="ブレーキ"><span>BRAKE</span></button>
+      <div class="touch-roll-pair" aria-label="バレルロール">
+        <button type="button" class="touch-button touch-roll touch-roll-left" data-touch="RollLeft" aria-label="左ロール"><span>↶&nbsp; ROLL</span></button>
+        <button type="button" class="touch-button touch-roll touch-roll-right" data-touch="RollRight" aria-label="右ロール"><span>ROLL &nbsp;↷</span></button>
+      </div>
+      <button type="button" class="touch-button touch-pause" data-touch-action="pause" aria-label="一時停止"><span>Ⅱ</span></button>
+    </div>
+  </div>
+
+  <!-- branching route choice -->
+  <div id="branch-screen" class="hidden">
+    <div class="branch-title">CHOOSE YOUR ROUTE</div>
+    <div class="branch-cards">
+      <div class="branch-card" data-opt="pursue">
+        <div class="bc-key">1 / ←</div>
+        <div class="bc-name">PURSUE THORNE</div>
+        <div class="bc-desc">Break off into an <b>All-Range</b> duel with your rival. High risk, big reward.</div>
+      </div>
+      <div class="branch-card" data-opt="guard">
+        <div class="bc-key">2 / →</div>
+        <div class="bc-name">GUARD THE FLEET</div>
+        <div class="bc-desc">Hold the line. Full shields, +1000, and an extra bomb from a grateful squadron.</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="module" src="./src/main.js?v=rankings-v48"></script>
+</body>
+</html>
