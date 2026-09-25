@@ -70,6 +70,26 @@ function renderSocialHtml(template, origin, normalPage = false) {
   return template.replace('{{SOCIAL_META}}', meta);
 }
 
+// Module scripts are only ever answered with JavaScript. A request the browser
+// makes as a script (or any .js/.mjs path) that has no matching file gets a
+// JavaScript-typed 404 rather than the game HTML, so a stale or mistyped module
+// path fails cleanly in the loader instead of parsing index.html as code.
+const SCRIPT_PATH_RE = /\.m?js$/i;
+
+function isScriptDest(req) {
+  return String(req.headers['sec-fetch-dest'] || '').toLowerCase() === 'script';
+}
+
+function writeScriptNotFound(res) {
+  const body = '/* 404: JavaScript module not found */\n';
+  return write(res, 404, {
+    'Content-Type': MIME['.js'],
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  }, body);
+}
+
 function isCrawler(req) {
   return CRAWLER_RE.test(String(req.headers['user-agent'] || ''));
 }
@@ -95,9 +115,12 @@ function writeHtml(req, res, status, headers, html) {
 }
 
 createServer(async (req, res) => {
+  let scriptRequest = isScriptDest(req);
   try {
     const url = new URL(req.url, 'http://request.local');
+    if (SCRIPT_PATH_RE.test(url.pathname)) scriptRequest = true;
     const pathname = decodeURIComponent(url.pathname);
+    if (SCRIPT_PATH_RE.test(pathname)) scriptRequest = true;
     const origin = getOrigin(req);
 
     // Stable, same-origin, non-redirecting OGP image route. Its source asset is
@@ -121,7 +144,7 @@ createServer(async (req, res) => {
 
     // The root keeps the full Canvas game for people, but crawler user agents
     // receive a compact static document so they never have to parse game assets.
-    if (pathname === '/') {
+    if (pathname === '/' && !scriptRequest) {
       if (isCrawler(req)) {
         const card = await readFile(CARD_PATH, 'utf8');
         return writeHtml(req, res, 200, {
@@ -142,8 +165,9 @@ createServer(async (req, res) => {
 
     const file = normalize(join(ROOT, pathname));
     if (!file.startsWith(normalize(ROOT))) return write(res, 403, { 'Content-Type': 'text/plain; charset=utf-8' }, 'forbidden');
-    const data = await readFile(file);
     const ext = extname(file).toLowerCase();
+    if (scriptRequest && ext !== '.js' && ext !== '.mjs') return writeScriptNotFound(res);
+    const data = await readFile(file);
     const cache = /\.(?:js|mjs|css|png|jpe?g|svg|woff2|ico|mp3|ogg|wav|glb|gltf|bin)$/i.test(file)
       ? 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400'
       : 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400';
@@ -154,6 +178,7 @@ createServer(async (req, res) => {
       'X-Content-Type-Options': 'nosniff',
     }, data);
   } catch {
+    if (scriptRequest) return writeScriptNotFound(res);
     return write(res, 404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=60' }, 'not found');
   }
 }).listen(PORT, '0.0.0.0', () => console.log(`serving on http://0.0.0.0:${PORT}`));

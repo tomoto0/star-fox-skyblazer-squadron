@@ -69,6 +69,8 @@ STAR_FOX/
 ├── index.html                  # ゲーム画面とUI要素
 ├── css/                        # HUD・メニュー・モバイル向けスタイル
 ├── src/
+│   ├── bootstrap.js            # モジュール読込の正規エントリ（main.jsを読み込み、失敗時は画面に通知）
+│   ├── main.js                 # Game生成とrAFループ
 │   ├── game/                   # Game本体、Waveスクリプト、ボス・進行管理
 │   ├── entities/               # プレイヤー、僚機、敵、3D機体ファクトリー
 │   ├── world/                  # 地形、空、景観プロップ、ゾーンパレット

@@ -8,6 +8,7 @@ STAR FOX "Skyblazer Squadron" — a commercial-grade browser 3D rail shooter (Th
 
 - **Run:** `node server.mjs` → http://127.0.0.1:8747 (a ~30-line static file server on port 8747). `.claude/launch.json` has a `starfox` config for `preview_start`. Python's `http.server` fails in the sandbox — use `server.mjs`.
 - **No build step.** Three.js 0.166 loads via the importmap in `index.html` straight from `node_modules`; everything under `src/` is native ES modules. Editing a file + reloading the page is the entire dev loop.
+- **Script requests never fall back to HTML.** `server.mjs` answers a missing `.js`/`.mjs` path (or any `Sec-Fetch-Dest: script` request that isn't a JS file) with a `text/javascript` 404 + `no-store`, so a stale module path fails cleanly instead of loading `index.html` as code.
 - **No test suite** (the `npm test` script is a stub). Verification is done by driving the game in a browser and inspecting state/screenshots.
 
 ### Driving the game headlessly (in the Browser pane)
@@ -25,7 +26,7 @@ g.render();
 
 ## Architecture
 
-`index.html` → `src/main.js` (`new Game(canvas)` + rAF loop) → **`src/game/game.js`** is the orchestrator. `Game` owns the renderer/`EffectComposer` (UnrealBloom + ACESFilmic tone mapping), scene, chase camera, lights, and every subsystem; it runs the `title / playing / branch / result / gameover` state machine, `_collisions()` (one big per-frame pass), and `explodeAt()` (the central choke point for kill VFX/SFX + debris). Subsystems are plain classes constructed once and updated each frame.
+`index.html` → `src/bootstrap.js` (canonical entry: forwards its `?v=` cache key to `main.js` and shows an on-screen notice if the module graph fails to load) → `src/main.js` (`new Game(canvas)` + rAF loop) → **`src/game/game.js`** is the orchestrator. `Game` owns the renderer/`EffectComposer` (UnrealBloom + ACESFilmic tone mapping), scene, chase camera, lights, and every subsystem; it runs the `title / playing / branch / result / gameover` state machine, `_collisions()` (one big per-frame pass), and `explodeAt()` (the central choke point for kill VFX/SFX + debris). Subsystems are plain classes constructed once and updated each frame.
 
 ### The rail model (critical coordinate convention)
 The **player is fixed at `PLAYER_Z = -20`** (constant in `src/entities/player.js`); the *world scrolls toward the camera* at `scroll = BASE_SCROLL(46) * player.speedFactor`. Consequences:

@@ -557,16 +557,17 @@ body.touch-device #pause-box span::after { content: 'TAP Ⅱ TO RESUME'; font-si
   #score { font-size: clamp(24px, 8vw, 34px); padding: 2px 8px 3px; }
   #lives { font-size: 13px; }
   #lives .ship-icon { font-size: 14px; }
-  #wing-status { display: none !important; }
+  #wing-status { top: calc(max(11px, env(safe-area-inset-top)) + 50px); left: max(11px, env(safe-area-inset-left)); flex-direction: row; gap: 4px; }
+  .wing-row { width: clamp(54px, 18.5vw, 70px); }
   #combo { display: none !important; }
-  #boss-bar { top: 56px; width: min(88vw, 370px); }
+  #boss-bar { top: calc(max(11px, env(safe-area-inset-top)) + 74px); width: min(88vw, 370px); }
   #boss-name { font-size: clamp(11px, 3.2vw, 14px); letter-spacing: 2px; }
   #boss-skull, #boss-phase { display: none; }
   #boss-track { height: 10px; }
   #wave-banner { top: 23%; }
   #wave-banner-top { font-size: clamp(31px, 10vw, 46px); letter-spacing: clamp(3px, 1vw, 6px); }
   #wave-banner-sub { font-size: clamp(12px, 3vw, 16px); letter-spacing: clamp(2px, .9vw, 5px); }
-  #alert-banner { top: 17%; font-size: clamp(21px, 6vw, 29px); letter-spacing: 3px; }
+  #alert-banner { top: 20%; font-size: clamp(21px, 6vw, 29px); letter-spacing: 3px; }
   #callout { top: 35%; max-width: 82vw; padding: 5px 12px 7px 10px; }
   #callout-icon { font-size: 18px; }
   #callout-text { font-size: clamp(16px, 4.5vw, 21px); letter-spacing: 1.4px; }
@@ -624,13 +625,25 @@ body.touch-device #pause-box span::after { content: 'TAP Ⅱ TO RESUME'; font-si
   #score-panel { top: 8px; right: 10px; }
   #score { font-size: 28px; }
   #boss-bar { top: 48px; }
-  #wing-status { display: none !important; }
+  #wing-status { top: 8px; left: 185px; flex-direction: row; gap: 4px; }
+  .wing-row { width: 62px; }
+  #alert-banner { top: 25%; }
   #dialogue { bottom: 124px; left: 10px; max-width: 54vw; }
   #dlg-portrait { width: 48px; height: 48px; }
   #dlg-text { font-size: 13px; }
   .touch-stick { width: 112px; height: 112px; bottom: 10px; left: 10px; }
   .touch-actions { width: 143px; height: 155px; bottom: 10px; right: 10px; }
   .touch-pause { top: -45px; width: 34px; height: 34px; }
+}
+
+/* phones: compact wingmate photo + HP chips in the top-left cluster (placement is set per orientation above) */
+@media (orientation: portrait) and (max-width: 700px), (orientation: landscape) and (max-height: 520px) {
+  .wing-row { gap: 4px; padding: 1px 4px 1px 1px; border-width: 1px; border-left-width: 3px; border-radius: 5px; }
+  .wing-pic { width: 16px; height: 16px; border-radius: 3px; }
+  .wing-info { gap: 2px; }
+  .wing-name { font-size: 7px; letter-spacing: .6px; }
+  .wing-hpbar { height: 4px; }
+  .wing-state { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

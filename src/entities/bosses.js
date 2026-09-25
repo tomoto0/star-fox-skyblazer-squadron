@@ -350,7 +350,7 @@ class BossBase {
 /* ================= WAVE 3 — TEMPEST RAY (sea) ================= */
 export class TempestRay extends BossBase {
   constructor(scene) {
-    super(scene, 'TEMPEST RAY', 115);
+    super(scene, 'TEMPEST RAY', 58);
     this.phaseCount = 2;
     const bodyMat = toonMat(0x2e4a6e, { flat: true });
     const body = new THREE.Mesh(new THREE.SphereGeometry(9, 12, 10), bodyMat);
