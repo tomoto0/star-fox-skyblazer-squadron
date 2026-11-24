@@ -2,11 +2,15 @@ import * as THREE from 'three';
 import { rand, dotTexture, TAU } from './util.js';
 
 const MAX = 900;
+const _c1 = new THREE.Color();
+const _c2 = new THREE.Color();
+const _cTmp = new THREE.Color();
 
 /** pooled additive point particles + expanding shockwave rings */
 export class Particles {
   constructor(scene) {
     this.scene = scene;
+    this.budgetScale = 1.0;
     this.geo = new THREE.BufferGeometry();
     this.pos = new Float32Array(MAX * 3);
     this.col = new Float32Array(MAX * 3);
@@ -107,19 +111,26 @@ export class Particles {
     this._pending = [];   // delayed emissions for multi-stage blasts
   }
 
+  /** Scale particle & sprite density smoothly for lightweight / adaptive quality tiers */
+  setBudget(scale = 1.0) {
+    this.budgetScale = Math.max(0.25, Math.min(1.0, scale));
+  }
+
   /** schedule a callback after `delay` seconds (drives staged, rolling explosions) */
   _after(delay, fn) { this._pending.push({ t: delay, fn }); }
 
   _spawnSprite(add, tex, x, y, z, o) {
+    if (this.budgetScale < 0.99 && Math.random() > this.budgetScale + 0.18) return;
     const pool = add ? this.addSprites : this.normSprites;
-    let idx = add ? this._addHead : this._normHead;
-    // find a free (or oldest) slot starting at the rotating head
+    const cap = Math.max(16, Math.round(pool.length * this.budgetScale));
+    let idx = (add ? this._addHead : this._normHead) % cap;
+    // find a free (or oldest) slot within the active budget cap
     let s = null;
-    for (let k = 0; k < pool.length; k++) {
-      const cand = pool[(idx + k) % pool.length];
-      if (!cand.visible) { s = cand; idx = (idx + k + 1) % pool.length; break; }
+    for (let k = 0; k < cap; k++) {
+      const cand = pool[(idx + k) % cap];
+      if (!cand.visible) { s = cand; idx = (idx + k + 1) % cap; break; }
     }
-    if (!s) { s = pool[idx]; idx = (idx + 1) % pool.length; }   // steal oldest
+    if (!s) { s = pool[idx]; idx = (idx + 1) % cap; }   // steal oldest
     if (add) this._addHead = idx; else this._normHead = idx;
     s.visible = true;
     s.material.map = tex;
@@ -190,21 +201,26 @@ export class Particles {
     this._spawnSprite(true, t, x, y, z, { color, life: 0.09, s0: 2 * s, s1: 6 * s, o0: 1, ease: 0.4 });
   }
 
-  /** player laser discharge: compact muzzle flare + forward-moving plasma grains */
+  /** player laser discharge: sculpted cross-star muzzle flare + directional ion streaks + recoil ring */
   laserMuzzle(x, y, z, level = 1) {
     const hyper = level >= 3;
-    const col = hyper ? 0x77c9ff : level === 2 ? 0x71ffd2 : 0xbfeaff;
-    this.muzzle(x, y, z, 0.72 + level * 0.18, col);
-    this.emit(x, y, z, {
-      count: hyper ? 5 : 3, speed: 26 + level * 7, vz: -62 - level * 9,
-      color: 0xffffff, color2: col, life: 0.18, size: 1.35 + level * 0.18,
-      drag: 3.6, spread: 0.22,
+    const col = hyper ? 0x62d2ff : level === 2 ? 0x66ffbe : 0x8effca;
+    this.muzzle(x, y, z, 0.78 + level * 0.20, col);
+    this._spawnSprite(true, this.tex.spark[3], x, y, z - 0.25, {
+      color: 0xffffff, life: 0.085, s0: 1.8 + level * 0.55, s1: 4.8 + level * 1.1, o0: 0.95, ease: 0.45,
     });
-    // Hyper Lasers get a brief secondary bloom rather than a permanently larger bolt.
-    if (hyper) this.flash(x, y, z - 0.35, 0.42, col);
+    this.emit(x, y, z, {
+      count: hyper ? 6 : 4, speed: 24 + level * 8, vz: -72 - level * 12,
+      color: 0xffffff, color2: col, life: 0.17, size: 1.35 + level * 0.20,
+      drag: 3.4, spread: 0.24,
+    });
+    if (level >= 2) {
+      this.ring(x, y, z - 0.5, { color: col, radius: hyper ? 3.8 : 2.6, dur: 0.12, from: 0.5, opacity: hyper ? 0.55 : 0.36 });
+    }
+    if (hyper) this.flash(x, y, z - 0.4, 0.46, col);
   }
 
-  /** terrain chip: short material-aware response when player fire strikes scenery. */
+  /** terrain chip: short material-aware response when shots strike cliffs or ground */
   terrainChip(x, y, z, zoneId = 'dune', scale = 1) {
     const p = {
       sea: { core: 0xd9f6ff, edge: 0x62b9e8, gravity: -24 },
@@ -212,25 +228,69 @@ export class Particles {
       ember: { core: 0xffd077, edge: 0xff562d, gravity: -28 },
       dune: { core: 0xf0cc83, edge: 0x9a6a3c, gravity: -19 },
     }[zoneId] ?? { core: 0xf0cc83, edge: 0x9a6a3c, gravity: -19 };
-    this.flash(x, y, z, 0.22 * scale, p.core);
-    this.emit(x, y, z, { count: 5, speed: 14 * scale, color: p.core, color2: p.edge, life: 0.30, size: 1.8 * scale, gravity: p.gravity, drag: 2.3, spread: 0.28 });
-    if (zoneId === 'ember') this.sparks(x, y, z, 0.34 * scale, p.core);
+    this.flash(x, y, z, 0.24 * scale, p.core);
+    this.emit(x, y, z, { count: 6, speed: 16 * scale, color: p.core, color2: p.edge, life: 0.32, size: 1.9 * scale, gravity: p.gravity, drag: 2.2, spread: 0.30 });
+    if (zoneId === 'ember') this.sparks(x, y, z, 0.38 * scale, p.core);
   }
 
-  /** Player laser contact: bright core, armour sparks and an expanding hit ring. */
+  /** metallic armour ricochet: crisp welding-arc spark shower + shock ring when shots/ships strike artificial structures */
+  structureHit(x, y, z, scale = 1) {
+    this.flash(x, y, z, 0.40 * scale, 0xfff3cc);
+    this.sparks(x, y, z, 0.56 * scale, 0xffd47a);
+    this.emit(x, y, z, {
+      count: 9, speed: 32 * scale, vy: 8 * scale,
+      color: 0xffffff, color2: 0xffa842, life: 0.34,
+      size: 1.85 * scale, gravity: -38, drag: 1.7, spread: 0.35,
+    });
+    this.ring(x, y, z, { color: 0xffe29a, radius: 5.5 * scale, dur: 0.20, from: 0.8, opacity: 0.48 });
+  }
+
+  /** lightweight live exhaust trail for incoming homing missiles & player charge singularities */
+  missileTrail(x, y, z, color = 0xff8a40, isCharge = false) {
+    if (this.budgetScale < 0.6 && Math.random() > 0.5) return;
+    this.emit(x, y, z, {
+      count: isCharge ? 2 : 1,
+      speed: isCharge ? 7 : 5,
+      color: 0xffffff,
+      color2: color,
+      life: isCharge ? 0.24 : 0.20,
+      size: isCharge ? 2.4 : 1.75,
+      drag: 2.8,
+      spread: isCharge ? 0.45 : 0.25,
+    });
+    if (!isCharge && this.budgetScale >= 0.72) {
+      this._spawnSprite(false, this.tex.smoke[0], x, y, z, {
+        color: 0x625a55, life: 0.34, s0: 1.4, s1: 3.8, o0: 0.28, ease: 0.8, drag: 1.6,
+      });
+    }
+  }
+
+  /** crisp glowing weapon-charge glint right before enemy fire or phase-dash */
+  weaponTelegraph(x, y, z, color = 0xff7058, scale = 1) {
+    this._spawnSprite(true, this.tex.spark[3], x, y, z, {
+      color, life: 0.24, s0: 1.6 * scale, s1: 7.4 * scale, o0: 0.92, spin: 5, ease: 0.45,
+    });
+    this.ring(x, y, z, { color, radius: 4.8 * scale, dur: 0.22, from: 0.6, opacity: 0.42 });
+  }
+
+  /** Player laser contact: hot-white core flash, dual concentric plasma rings & precision armour sparks */
   laserImpact(x, y, z, level = 1, weak = false) {
     const hyper = level >= 3;
-    const col = hyper ? 0x69c4ff : level === 2 ? 0x5dffcd : 0xaffff0;
-    const scale = weak ? 1.45 : 1 + level * 0.12;
-    this.flash(x, y, z, (weak ? 0.82 : 0.48) + level * 0.10, weak ? 0xffffff : col);
-    this.sparks(x, y, z, (weak ? 0.72 : 0.46) * scale, weak ? 0xffffff : col);
-    this.emit(x, y, z, {
-      count: (weak ? 10 : 7) + level * 2, speed: weak ? 30 : 22,
-      color: 0xffffff, color2: col, life: weak ? 0.40 : 0.30,
-      size: weak ? 2.45 : 1.90, drag: 2.65, spread: 0.46,
+    const col = hyper ? 0x62ccff : level === 2 ? 0x56ffc6 : 0x9effe2;
+    const scale = weak ? 1.5 : 1 + level * 0.14;
+    this.flash(x, y, z, (weak ? 0.88 : 0.52) + level * 0.10, weak ? 0xffffff : col);
+    this._spawnSprite(true, this.tex.spark[3], x, y, z, {
+      color: 0xffffff, life: 0.18, s0: 2.4 * scale, s1: 9.2 * scale, o0: 0.96, spin: rand(-5, 5), ease: 0.42,
     });
-    // Every confirmed hit gets a brief ring, so distant impacts remain readable.
-    this.ring(x, y, z, { color: col, radius: weak ? 13 : 7 + level, dur: weak ? 0.38 : 0.26, from: 1.0, opacity: weak ? 0.48 : 0.34 });
+    this.sparks(x, y, z, (weak ? 0.78 : 0.50) * scale, weak ? 0xffffff : col);
+    this.emit(x, y, z, {
+      count: (weak ? 12 : 8) + level * 2, speed: weak ? 34 : 25,
+      color: 0xffffff, color2: col, life: weak ? 0.42 : 0.30,
+      size: weak ? 2.5 : 1.95, drag: 2.5, spread: 0.48,
+    });
+    // Dual concentric shock rings (fast hot-white inner + colored outer wave)
+    this.ring(x, y, z, { color: 0xffffff, radius: weak ? 8.5 : 4.8 + level * 0.7, dur: 0.18, from: 0.7, opacity: weak ? 0.68 : 0.50 });
+    this.ring(x, y, z, { color: col, radius: weak ? 14.5 : 8.2 + level, dur: weak ? 0.40 : 0.28, from: 1.2, opacity: weak ? 0.54 : 0.38 });
   }
 
   /** small detonation when an enemy round hits the player / scenery — tinted per weapon */
@@ -246,10 +306,12 @@ export class Particles {
   }
 
   emit(x, y, z, opts = {}) {
-    const n = opts.count ?? 10;
+    const rawN = opts.count ?? 10;
+    const n = Math.max(1, Math.round(rawN * this.budgetScale));
     const spd = opts.speed ?? 20;
-    const col = new THREE.Color(opts.color ?? 0xffcc66);
-    const col2 = opts.color2 !== undefined ? new THREE.Color(opts.color2) : col;
+    _c1.set(opts.color ?? 0xffcc66);
+    if (opts.color2 !== undefined) _c2.set(opts.color2);
+    else _c2.copy(_c1);
     for (let k = 0; k < n; k++) {
       const i = this.head; this.head = (this.head + 1) % MAX;
       if (this.activeIndex[i] < 0) {
@@ -264,8 +326,8 @@ export class Particles {
       this.vel[i * 3] = Math.sin(b) * Math.cos(a) * s + (opts.vx ?? 0);
       this.vel[i * 3 + 1] = Math.cos(b) * s + (opts.vy ?? 0);
       this.vel[i * 3 + 2] = Math.sin(b) * Math.sin(a) * s + (opts.vz ?? 0);
-      const c = col.clone().lerp(col2, Math.random());
-      this.col[i * 3] = c.r; this.col[i * 3 + 1] = c.g; this.col[i * 3 + 2] = c.b;
+      _cTmp.copy(_c1).lerp(_c2, Math.random());
+      this.col[i * 3] = _cTmp.r; this.col[i * 3 + 1] = _cTmp.g; this.col[i * 3 + 2] = _cTmp.b;
       this.maxLife[i] = this.life[i] = (opts.life ?? 0.8) * rand(0.6, 1.15);
       this.baseSize[i] = (opts.size ?? 2.4) * rand(0.6, 1.4);
       this.drag[i] = opts.drag ?? 1.6;
@@ -285,22 +347,24 @@ export class Particles {
     m.scale.setScalar(m.userData.from);
   }
 
-  explosion(x, y, z, big = false) {
-    const s = big ? 2.6 : 1.15;
-    // textured billboard layer (Kenney Particle Pack)
-    this.flash(x, y, z, big ? 2.4 : 1.2);
-    this.fireball(x, y, z, big ? 2.6 : 1.4);
-    this.smoke(x, y, z, big ? 2.3 : 1.1);
-    this.sparks(x, y, z, big ? 2.0 : 1.1);
-    // point-sprite embers underneath (adds fine grain)
-    this.emit(x, y, z, { count: big ? 22 : 11, speed: 30 * s, color: 0xfff3b0, color2: 0xff8030, life: 0.6, size: 3.6 * s, drag: 2.4 });
-    this.emit(x, y, z, { count: big ? 14 : 7, speed: 17 * s, color: 0xff5b2e, color2: 0x992211, life: 1.0, size: 4.8 * s, drag: 1.8 });
+  explosion(x, y, z, big = false, scaleMul = 1) {
+    const m = scaleMul;
+    const s = (big ? 2.8 : 1.35) * m;
+    // Multi-layered fiery detonation scaled for visceral close-range impact!
+    this.flash(x, y, z, (big ? 2.7 : 1.45) * m);
+    this.fireball(x, y, z, (big ? 2.9 : 1.65) * m);
+    this.smoke(x, y, z, (big ? 2.5 : 1.3) * m);
+    this.sparks(x, y, z, (big ? 2.3 : 1.35) * m);
+    // Fiery inner embers + fast flying glow sparks
+    this.emit(x, y, z, { count: Math.round((big ? 28 : 14) * Math.min(m, 1.4)), speed: 34 * s, color: 0xfff5b8, color2: 0xff8028, life: 0.65, size: 4.0 * s, drag: 2.3 });
+    this.emit(x, y, z, { count: Math.round((big ? 18 : 9) * Math.min(m, 1.4)), speed: 19 * s, color: 0xff5a28, color2: 0x992010, life: 1.05, size: 5.2 * s, drag: 1.7 });
+    // Crisp dual-plane shockwave rings (vertical plasma flash + horizontal blast wave on big kills!)
+    this.ring(x, y, z, { color: big ? 0xfff5e0 : 0xffbe74, radius: (big ? 80 : 32) * m, dur: big ? 0.44 : 0.30, from: big ? 4 : 2, opacity: big ? 0.48 : 0.38 });
+    this.ring(x, y, z, { color: big ? 0xff9248 : 0xffe8b4, radius: (big ? 58 : 22) * m, dur: big ? 0.52 : 0.26, from: 1.5, horizontal: true, opacity: big ? 0.36 : 0.28 });
     if (big) {
-      // one brief, faint blast wave — the fire and smoke carry the realism
-      this.ring(x, y, z, { color: 0xfff2e0, radius: 72, dur: 0.4, from: 4, opacity: 0.32 });
-      this._after(0.08, () => { this.fireball(x + rand(-8, 8), y + rand(2, 9), z + rand(-6, 6), 2.0); this.sparks(x, y, z, 1.3); });
-      this._after(0.20, () => { this.fireball(x + rand(-9, 9), y + rand(6, 12), z + rand(-6, 6), 1.7); this.smoke(x, y + 6, z, 1.9); });
-      this._after(0.36, () => this.smoke(x, y + 13, z, 1.7));
+      this._after(0.08, () => { this.fireball(x + rand(-9, 9) * m, y + rand(2, 10) * m, z + rand(-6, 6), 2.2 * m); this.sparks(x, y, z, 1.5 * m); });
+      this._after(0.19, () => { this.fireball(x + rand(-10, 10) * m, y + rand(6, 13) * m, z + rand(-6, 6), 1.9 * m); this.smoke(x, y + 6, z, 2.1 * m); });
+      this._after(0.34, () => this.smoke(x, y + 14, z, 1.9 * m));
     }
   }
 

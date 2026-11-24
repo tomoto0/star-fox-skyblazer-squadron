@@ -25,21 +25,30 @@ const PORTRAITS = {
 export class Hud {
   constructor() {
     this.el = {
-      hud: $('hud'), hpFill: $('bar-hp-fill'), boostFill: $('bar-boost-fill'),
+      hud: $('hud'),
+      hpFill: $('bar-hp-fill'), hpLag: $('bar-hp-lag'), hpVal: $('bar-hp-val'),
+      boostFill: $('bar-boost-fill'),
       laserPips: $('laser-pips'), bombGems: $('bomb-gems'),
       score: $('score'), lives: $('lives-num'),
+      waveStatus: $('wave-status'), waveTag: $('wave-tag'), waveZone: $('wave-zone'),
+      waveHostiles: $('wave-hostiles'), waveProgFill: $('wave-progress-fill'),
+      btnAuto: $('btn-hud-autofire'), btnMute: $('btn-hud-mute'), btnPause: $('btn-hud-pause'),
       bossBar: $('boss-bar'), bossName: $('boss-name'), bossFill: $('boss-fill'),
       waveBanner: $('wave-banner'), waveTop: $('wave-banner-top'), waveSub: $('wave-banner-sub'),
       alert: $('alert-banner'),
       bossFillLag: $('boss-fill-lag'), bossTicks: $('boss-ticks'), bossPhase: $('boss-phase'), bossSkull: $('boss-skull'),
       callout: $('callout'), calloutIcon: $('callout-icon'), calloutText: $('callout-text'),
-      combo: $('combo'), comboX: $('combo-x'),
+      bombPrompt: $('bomb-prompt'),
+      combo: $('combo'), comboX: $('combo-x'), comboBarFill: $('combo-bar-fill'),
       wingStatus: $('wing-status'),
       rivalMark: $('rival-marker'), rivalMarkSvg: $('rival-marker')?.querySelector('svg'),
+      threatLayer: $('threat-indicators'),
       dlg: $('dialogue'), dlgImg: $('dlg-img'), dlgName: $('dlg-name'), dlgText: $('dlg-text'),
       retNear: $('reticle-near'), retFar: $('reticle-far'), lockLayer: $('lock-markers'),
+      killPopups: $('kill-popups'),
       chargeRing: $('charge-ring'), chargeArc: $('charge-arc'),
       hurt: $('hurt-flash'), white: $('white-flash'), vignette: $('vignette'),
+      perfBadge: $('perf-badge'), contextLost: $('context-lost-banner'),
     };
     this._pips = []; this._gems = []; this._wingRows = {};
     // laser-power level → laser-bolt icons; bomb count → bomb icons
@@ -60,20 +69,106 @@ export class Hud {
       this.el.lockLayer.appendChild(m);
       this._lockPool.push(m);
     }
+    // Pool of 4 directional off-screen threat chevrons
+    this._threatPool = [];
+    if (this.el.threatLayer) {
+      for (let i = 0; i < 4; i++) {
+        const el = document.createElement('div');
+        el.className = 'threat-arrow';
+        el.innerHTML = '<svg viewBox="0 0 32 32"><path d="M16 3 L28 25 L16 19 L4 25 Z"/></svg>';
+        el.style.display = 'none';
+        this.el.threatLayer.appendChild(el);
+        this._threatPool.push({ el, svg: el.querySelector('svg') });
+      }
+    }
+
     this._dlgQueue = [];
     this._dlgActive = null;
     this._dlgChar = 0; this._dlgTimer = 0;
-    this._bannerT = 0; this._score = -1;
+    this._bannerT = 0; this._alertT = 0; this._score = -1;
+    this._lastHpText = '';
+    this._lastWaveKey = '';
   }
 
   show() { this.el.hud.classList.remove('hidden'); }
   hide() { this.el.hud.classList.add('hidden'); }
 
   setBars(hp, boost) {
-    this.el.hpFill.style.transform = `scaleX(${clamp(hp / 100, 0, 1)})`;
+    const k = clamp(hp / 100, 0, 1);
+    this.el.hpFill.style.transform = `scaleX(${k})`;
+    if (this.el.hpLag) this.el.hpLag.style.transform = `scaleX(${k})`;
     this.el.hpFill.classList.toggle('low', hp < 30);
+    if (this.el.hpVal) {
+      const txt = String(Math.max(0, Math.ceil(hp)));
+      if (txt !== this._lastHpText) {
+        this._lastHpText = txt;
+        this.el.hpVal.textContent = txt;
+      }
+    }
     this.el.boostFill.style.transform = `scaleX(${clamp(boost / 100, 0, 1)})`;
+    this.el.hud.classList.toggle('is-low-hp', hp > 0 && hp < 30);
   }
+
+  setFlightState(speedFactor) {
+    this.el.hud.classList.toggle('is-boosting', speedFactor > 1.32);
+    this.el.hud.classList.toggle('is-braking', speedFactor < 0.78);
+  }
+
+  setWaveProgress(wave, totalWaves, zoneName, progress01, hostiles, modeLabel = '') {
+    const el = this.el.waveStatus;
+    if (!el) return;
+    const bossVisible = !this.el.bossBar.classList.contains('hidden');
+    el.classList.toggle('hidden', bossVisible);
+    if (bossVisible) return;
+    const tag = `W${String(wave).padStart(2, '0')} / ${String(totalWaves).padStart(2, '0')}`;
+    const zone = modeLabel || zoneName || '';
+    const hos = modeLabel ? 'ENGAGE' : `HOSTILES ${String(hostiles).padStart(2, '0')}`;
+    const key = `${tag}|${zone}|${hos}`;
+    if (key !== this._lastWaveKey) {
+      this._lastWaveKey = key;
+      if (this.el.waveTag) this.el.waveTag.textContent = tag;
+      if (this.el.waveZone) this.el.waveZone.textContent = zone;
+      if (this.el.waveHostiles) this.el.waveHostiles.textContent = hos;
+    }
+    if (this.el.waveProgFill) {
+      this.el.waveProgFill.style.transform = `scaleX(${clamp(progress01, 0, 1)})`;
+    }
+  }
+
+  setQuickTools({ autoFire, muted }) {
+    if (this.el.btnAuto) {
+      this.el.btnAuto.classList.toggle('is-on', !!autoFire);
+      this.el.btnAuto.setAttribute('aria-pressed', autoFire ? 'true' : 'false');
+    }
+    if (this.el.btnMute) {
+      this.el.btnMute.classList.toggle('is-muted', !!muted);
+      this.el.btnMute.textContent = muted ? 'MUTE' : 'SFX';
+      this.el.btnMute.setAttribute('aria-pressed', muted ? 'true' : 'false');
+    }
+  }
+
+  setBombPrompt(visible) {
+    if (!this.el.bombPrompt) return;
+    this.el.bombPrompt.classList.toggle('hidden', !visible);
+  }
+
+  setPerf(fps, tierName, isAuto, visible) {
+    const el = this.el.perfBadge;
+    if (!el) return;
+    el.classList.toggle('hidden', !visible);
+    if (!visible) return;
+    const text = `${Math.round(fps)} FPS · ${isAuto ? `AUTO:${tierName}` : tierName}`;
+    if (text !== this._lastPerfText) {
+      this._lastPerfText = text;
+      el.textContent = text;
+      el.classList.toggle('is-lite', tierName === 'FAST' || tierName === 'LITE');
+    }
+  }
+
+  setContextLost(lost) {
+    this.el.contextLost?.classList.toggle('hidden', !lost);
+  }
+
   setScore(v) {
     if (v === this._score) return;
     this._score = v;
@@ -87,9 +182,9 @@ export class Hud {
   showBoss(name, phases = 1) {
     this.el.bossName.textContent = name;
     this.el.bossBar.classList.remove('hidden');
+    this.el.waveStatus?.classList.add('hidden');
     // segmented ticks
     this.el.bossTicks.innerHTML = '';
-    const segs = clamp(Math.round(name.length > 0 ? 10 : 10), 6, 12);
     for (let i = 0; i < 10; i++) this.el.bossTicks.appendChild(document.createElement('i'));
     // phase pips
     this._bossPhases = phases;
@@ -149,16 +244,40 @@ export class Hud {
     el.style.filter = hit ? 'brightness(2)' : 'none';
   }
 
+  /* ---- off-screen threat edge indicators ---- */
+  setThreats(list) {
+    for (let i = 0; i < this._threatPool.length; i++) {
+      const slot = this._threatPool[i];
+      const item = list && list[i];
+      if (!item) {
+        slot.el.style.display = 'none';
+        continue;
+      }
+      slot.el.style.display = 'block';
+      slot.el.style.left = `${Math.round(item.x)}px`;
+      slot.el.style.top = `${Math.round(item.y)}px`;
+      slot.el.style.opacity = String(clamp(item.opacity ?? 0.85, 0.25, 1));
+      slot.el.classList.toggle('is-missile', item.kind === 'missile');
+      if (slot.svg) slot.svg.style.transform = `rotate(${Math.round(item.angleDeg)}deg)`;
+    }
+  }
+
   /* ---- combo ---- */
-  setCombo(n) {
+  setCombo(n, ratio = 1) {
     if (n >= 2) {
       this.el.comboX.textContent = 'x' + n;
       this.el.combo.classList.remove('hidden');
       this.el.combo.classList.remove('bump');
       void this.el.combo.offsetWidth;
       this.el.combo.classList.add('bump');
+      this.setComboTimer(ratio);
     } else {
       this.el.combo.classList.add('hidden');
+    }
+  }
+  setComboTimer(ratio) {
+    if (this.el.comboBarFill) {
+      this.el.comboBarFill.style.transform = `scaleX(${clamp(ratio, 0, 1)})`;
     }
   }
 
@@ -223,25 +342,58 @@ export class Hud {
     this.el.dlg.classList.add('hidden');
   }
 
-  /* ---- reticle & locks (screen-space px) ---- */
-  reticle(near, far, locked) {
+  /* ---- reticle & locks (resolution-independent centering) ---- */
+  reticle(near, far, locked, snapped = false) {
     const rn = this.el.retNear, rf = this.el.retFar;
-    rn.style.transform = `translate(${near.x - 46}px, ${near.y - 46}px)`;
-    rf.style.transform = `translate(${far.x - 27}px, ${far.y - 27}px)`;
-    rn.classList.toggle('locked', locked);
-    rf.classList.toggle('locked', locked);
+    rn.style.transform = `translate3d(${near.x}px, ${near.y}px, 0) translate(-50%, -50%)`;
+    rf.style.transform = `translate3d(${far.x}px, ${far.y}px, 0) translate(-50%, -50%)`;
+    rn.classList.toggle('locked', !!locked);
+    rf.classList.toggle('locked', !!locked);
+    rn.classList.toggle('snapped', !locked && !!snapped);
+    rf.classList.toggle('snapped', !locked && !!snapped);
+  }
+  /** Brief tactile flash on the targeting reticles when lasers hit or destroy an enemy */
+  hitConfirm(isKill = false) {
+    const rn = this.el.retNear, rf = this.el.retFar;
+    if (!rn || !rf) return;
+    const cls = isKill ? 'kill-tick' : 'hit-tick';
+    rn.classList.add(cls); rf.classList.add(cls);
+    clearTimeout(isKill ? this._killTickT : this._hitTickT);
+    const t = setTimeout(() => { rn.classList.remove(cls); rf.classList.remove(cls); }, isKill ? 150 : 75);
+    if (isKill) this._killTickT = t; else this._hitTickT = t;
+  }
+  /** Floating Star Fox-style score/close-kill/counter popup right at the target's screen position */
+  killPop(screen, points, tag = '', style = '') {
+    const layer = this.el.killPopups;
+    if (!layer || !screen) return;
+    if (screen.x < 20 || screen.x > window.innerWidth - 20 || screen.y < 20 || screen.y > window.innerHeight - 20) return;
+    // Cap concurrent popups so heavy chain explosions stay fast in the DOM
+    while (layer.children.length >= 12) layer.firstElementChild?.remove();
+    const el = document.createElement('div');
+    el.className = 'kill-pop' + (tag ? ' close-kill' : '') + (style ? ` ${style}` : '');
+    el.style.left = `${Math.round(screen.x)}px`;
+    el.style.top = `${Math.round(screen.y)}px`;
+    el.textContent = points > 0 ? `+${points}` : tag;
+    if (points > 0 && tag) {
+      const sub = document.createElement('small');
+      sub.textContent = tag;
+      el.appendChild(sub);
+    }
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), 840);
   }
   charge(k, x, y) {
     if (k <= 0) { this.el.chargeRing.classList.add('hidden'); return; }
     this.el.chargeRing.classList.remove('hidden');
-    this.el.chargeRing.style.transform = `translate(${x - 30}px, ${y + 40}px)`;
+    this.el.chargeRing.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, 34px)`;
     this.el.chargeArc.style.strokeDashoffset = String(150.8 * (1 - clamp(k, 0, 1)));
   }
   locks(positions) {
     this._lockPool.forEach((m, i) => {
       if (i < positions.length) {
         m.style.display = 'block';
-        m.style.transform = `translate(${positions[i].x - 23}px, ${positions[i].y - 23}px)`;
+        m.style.left = `${positions[i].x}px`;
+        m.style.top = `${positions[i].y}px`;
       } else m.style.display = 'none';
     });
   }

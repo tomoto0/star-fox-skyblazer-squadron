@@ -119,6 +119,11 @@ createServer(async (req, res) => {
       }, 'User-agent: *\nAllow: /\n');
     }
 
+    const isLocal = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(origin);
+    const htmlCache = isLocal
+      ? 'no-store, must-revalidate'
+      : 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400';
+
     // The root keeps the full Canvas game for people, but crawler user agents
     // receive a compact static document so they never have to parse game assets.
     if (pathname === '/') {
@@ -126,7 +131,7 @@ createServer(async (req, res) => {
         const card = await readFile(CARD_PATH, 'utf8');
         return writeHtml(req, res, 200, {
           'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
+          'Cache-Control': htmlCache,
           'X-Robots-Tag': 'all',
           'Vary': 'User-Agent',
         }, renderSocialHtml(card, origin));
@@ -134,7 +139,7 @@ createServer(async (req, res) => {
       const index = await readFile(INDEX_PATH, 'utf8');
       return writeHtml(req, res, 200, {
         'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
+        'Cache-Control': htmlCache,
         'X-Robots-Tag': 'all',
         'Vary': 'User-Agent',
       }, renderSocialHtml(index, origin, true));
@@ -144,9 +149,12 @@ createServer(async (req, res) => {
     if (!file.startsWith(normalize(ROOT))) return write(res, 403, { 'Content-Type': 'text/plain; charset=utf-8' }, 'forbidden');
     const data = await readFile(file);
     const ext = extname(file).toLowerCase();
-    const cache = /\.(?:js|mjs|css|png|jpe?g|svg|woff2|ico|mp3|ogg|wav|glb|gltf|bin)$/i.test(file)
-      ? 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400'
-      : 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400';
+    const isCode = /\.(?:html|js|mjs|css)$/i.test(file);
+    const cache = (isLocal && isCode)
+      ? 'no-store, must-revalidate'
+      : /\.(?:js|mjs|css|png|jpe?g|svg|woff2|ico|mp3|ogg|wav|glb|gltf|bin)$/i.test(file)
+        ? 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400'
+        : 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400';
     return write(res, 200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
       'Content-Length': data.length,

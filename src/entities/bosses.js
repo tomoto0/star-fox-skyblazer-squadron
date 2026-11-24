@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { toonMat, dotTexture, rand, clamp, damp, TAU, _v1, _v2 } from '../core/util.js';
+import { normalizeImportedMaterial } from './shipFactory.js';
 
 /* real CC0 3D models used as boss hulls (Quaternius ships / Kenney structures)
  * and the Kenney turret bolted onto the fortress. Loaded once, cloned per boss. */
@@ -9,7 +10,15 @@ function loadBossModel(key, path, size, extOverride) {
   const ext = extOverride || (path.startsWith('ships/') ? 'gltf' : 'glb');
   new GLTFLoader().load(`./assets/models/${path}.${ext}`, (g) => {
     const obj = g.scene;
-    obj.traverse((o) => { if (o.isMesh) { o.castShadow = o.receiveShadow = false; if (o.material) o.material.fog = true; } });
+    obj.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = o.receiveShadow = false;
+      if (o.geometry) o.geometry.userData.shared = true;
+      for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+        normalizeImportedMaterial(m, { emissiveFloor: 0.22 });
+        if (m) m.userData.shared = true;
+      }
+    });
     const box = new THREE.Box3().setFromObject(obj);
     const c = box.getCenter(new THREE.Vector3());
     const dim = box.getSize(new THREE.Vector3());
@@ -20,18 +29,27 @@ function loadBossModel(key, path, size, extOverride) {
   });
 }
 // TEMPEST RAY flies the expansion pack's purpose-built enemy command ship
-loadBossModel('ray', 'expansion/Spaceship_RaeTheRedPanda', 56, 'gltf');
-loadBossModel('warden', 'props/hangar_largea', 82); // CASCADE WARDEN — fortress station
-loadBossModel('dread', 'ships/imperial', 70);       // DREAD SOVEREIGN — capital ship
+loadBossModel('ray', 'expansion/Spaceship_RaeTheRedPanda', 64, 'gltf');
+loadBossModel('warden', 'props/hangar_largea', 90); // CASCADE WARDEN — fortress station
+loadBossModel('dread', 'ships/imperial', 78);       // DREAD SOVEREIGN — capital ship
 // Formerly unused CC0 models for the expanded afterburner campaign bosses
-loadBossModel('matriarch', 'ships/insurgent', 86);   // OBSIDIAN MATRIARCH — assault carrier
-loadBossModel('harbinger', 'external/aero_station_ring', 108); // RIFT HARBINGER — relay citadel
+loadBossModel('matriarch', 'ships/insurgent', 94);   // OBSIDIAN MATRIARCH — assault carrier
+loadBossModel('harbinger', 'external/aero_station_ring', 118); // RIFT HARBINGER — relay citadel
 loadBossModel('serpentSeg', 'debris/meteor', 1);    // EMBER SERPENT — rock segments
 let _turretTpl = null;
+let _sharedScorchTex = null;
 new GLTFLoader().load('./assets/models/props/turret_double.glb', (g) => {
+  g.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    if (o.geometry) o.geometry.userData.shared = true;
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      normalizeImportedMaterial(m, { emissiveFloor: 0.22 });
+      if (m) m.userData.shared = true;
+    }
+  });
   const box = new THREE.Box3().setFromObject(g.scene);
   const dim = box.getSize(new THREE.Vector3());
-  g.scene.scale.setScalar(9 / (Math.max(dim.x, dim.y, dim.z) || 1));
+  g.scene.scale.setScalar(11 / (Math.max(dim.x, dim.y, dim.z) || 1));
   _turretTpl = g.scene;
 });
 import { PLAYER_Z } from './player.js';
@@ -258,8 +276,11 @@ class BossBase {
   addScorch(point) {
     if (!this.scorches) {
       this.scorches = [];
-      this._scorchTex = new THREE.TextureLoader().load('./assets/particles/scorch_01.png');
-      this._scorchTex.colorSpace = THREE.SRGBColorSpace;
+      if (!_sharedScorchTex) {
+        _sharedScorchTex = new THREE.TextureLoader().load('./assets/particles/scorch_01.png');
+        _sharedScorchTex.colorSpace = THREE.SRGBColorSpace;
+      }
+      this._scorchTex = _sharedScorchTex;
     }
     let e;
     if (this.scorches.length >= 14) {
@@ -278,7 +299,18 @@ class BossBase {
     e.life = 8;
   }
 
-  destroy() { this.scene.remove(this.group); }
+  destroy() {
+    this.scene.remove(this.group);
+    this.group.traverse((n) => {
+      if (n.geometry && !n.geometry.userData?.shared) n.geometry.dispose?.();
+      if (n.material) {
+        const mats = Array.isArray(n.material) ? n.material : [n.material];
+        for (const m of mats) {
+          if (m && !m.userData?.shared) m.dispose?.();
+        }
+      }
+    });
+  }
   /** once the external hull model has loaded, swap it in and hide the
    *  procedural hull meshes (weakpoints / accents / added models are kept) */
   _tryBodyModel() {
@@ -388,9 +420,9 @@ export class TempestRay extends BossBase {
     this.core = this.addWeak(new THREE.Vector3(0, -1.5, -11), 5.4, 38, 0xff9e4a);
     this.core.active = false;
     this.bodyRadius = 20;
-    this.group.position.set(0, 24, -560);
-    this.fireCd = 2.5;
-    scaleBoss(this, 2.0);
+    this.group.position.set(0, 24, -360);
+    this.fireCd = 2.1;
+    scaleBoss(this, 2.05);
     this._modelKey = 'ray'; this._modelOpts = { rotY: Math.PI };
     addBossHardware(this, 'ray', 0x59e6f6, 0x24405e);
   }
@@ -398,8 +430,8 @@ export class TempestRay extends BossBase {
     super.update(ctx);
     const { dt, player, proj } = ctx;
     const p = this.group.position;
-    // agile ray: figure-8 strafes with sudden dives at the player
-    this._maneuver(dt, player, { xRange: 72, yBase: 32, yRange: 16, zNear: -150, zFar: -320, speed: 0.95 });
+    // agile ray: figure-8 strafes with intimidating close lunges right in front of the player
+    this._maneuver(dt, player, { xRange: 58, yBase: 28, yRange: 14, zNear: -96, zFar: -195, speed: 1.05 });
     this.group.rotation.x = Math.sin(this.time * 0.9) * 0.13;
     this.group.rotation.y = damp(this.group.rotation.y, (player.x - p.x) * 0.004, 2, dt);
 
@@ -480,11 +512,11 @@ export class CascadeWarden extends BossBase {
     this.core = this.addWeak(new THREE.Vector3(0, 19, -6), 4.6, 48, 0x59e6f6);
     this.core.active = false;
     this.bodyRadius = 30;
-    this.group.position.set(0, 0, -640);
-    this.doorTimer = 4;
+    this.group.position.set(0, 0, -400);
+    this.doorTimer = 3.6;
     this.doorOpen = false;
-    this.fireIdx = 0; this.fireCd = 2.0;
-    scaleBoss(this, 1.55);
+    this.fireIdx = 0; this.fireCd = 1.8;
+    scaleBoss(this, 1.6);
     this._modelKey = 'warden'; this._modelOpts = { y: 26 };
     addBossHardware(this, 'warden', 0xffa040, 0x5e5340);
   }
@@ -502,8 +534,8 @@ export class CascadeWarden extends BossBase {
     }
     const { dt, player, proj } = ctx;
     const p = this.group.position;
-    // a marching fortress: grinds forward to bear down, then pulls back
-    this._maneuver(dt, player, { xRange: 62, yBase: 0, yRange: 5, zNear: -185, zFar: -320, speed: 0.75, bank: false });
+    // a marching fortress: grinds close to loom huge ahead, then pulls back slightly
+    this._maneuver(dt, player, { xRange: 50, yBase: 0, yRange: 4, zNear: -118, zFar: -210, speed: 0.85, bank: false });
 
     const turretsLeft = this.turrets.filter((t) => t.alive).length;
     this.doorTimer -= dt;
@@ -606,7 +638,7 @@ export class EmberSerpent extends BossBase {
     this.bodyRadius = 0; // body handled via segments
     this.fireCd = 2.2;
     this.group.position.set(0, 0, 0);
-    this.headPos = new THREE.Vector3(0, 26, -520);
+    this.headPos = new THREE.Vector3(0, 24, -340);
   }
   _scorchParent(point) {
     let best = this.segs[0], bd = Infinity;
@@ -617,9 +649,9 @@ export class EmberSerpent extends BossBase {
     const base = super.hitTest(point, r);
     if (base) return base;
     for (let i = 1; i < this.segs.length; i++) {
-      if (point.distanceTo(this.segs[i].position) < 5.5 + r) return { kind: 'body', wp: null };
+      if (point.distanceTo(this.segs[i].position) < 6.4 + r) return { kind: 'body', wp: null };
     }
-    if (point.distanceTo(this.segs[0].position) < 8 + r) return { kind: 'body', wp: null };
+    if (point.distanceTo(this.segs[0].position) < 9.5 + r) return { kind: 'body', wp: null };
     return null;
   }
   update(ctx) {
@@ -630,7 +662,7 @@ export class EmberSerpent extends BossBase {
       for (const seg of this.segs) {
         const r = seg.geometry.parameters.radius || 4;
         const rock = BOSS_MODELS.serpentSeg.clone(true);
-        rock.scale.setScalar(r * 1.75);
+        rock.scale.setScalar(r * 1.9);
         rock.rotation.set(rand(0, TAU), rand(0, TAU), rand(0, TAU));
         rock.traverse((o) => o.layers && o.layers.enable(1));
         seg.add(rock);
@@ -638,13 +670,13 @@ export class EmberSerpent extends BossBase {
       }
     }
     const { dt, player, proj } = ctx;
-    // aggressive weaving head path — lunges in close, then recoils far back
+    // aggressive weaving head path — lunges dramatically close, then coils back
     const t = this.time;
-    const tz = -190 - Math.sin(t * 0.4) * 150;
+    const tz = -112 - Math.sin(t * 0.48) * 68;
     this.headPos.set(
-      Math.sin(t * 0.9) * 48 + Math.sin(t * 2.1) * 8,
-      22 + Math.sin(t * 0.6 + 1.2) * 16,
-      Math.min(this.headPos.z + 48 * dt, tz)
+      Math.sin(t * 0.9) * 44 + Math.sin(t * 2.1) * 8,
+      20 + Math.sin(t * 0.65 + 1.2) * 14,
+      Math.min(this.headPos.z + 64 * dt, tz)
     );
     // segments follow with delay
     const head = this.segs[0];
@@ -748,10 +780,10 @@ export class DreadSovereign extends BossBase {
     this.core = this.addWeak(new THREE.Vector3(0, -1, -26), 5.2, 90, 0x8f5cff);
     this.core.active = false;
     this.bodyRadius = 34;
-    this.group.position.set(0, 30, -680);
-    this.fireCd = 2.2; this.ringCd = 4; this.droneCd = 7;
+    this.group.position.set(0, 28, -420);
+    this.fireCd = 2.0; this.ringCd = 4; this.droneCd = 7;
     this.phase = 1;
-    scaleBoss(this, 1.9);
+    scaleBoss(this, 1.95);
     this._modelKey = 'dread'; this._modelOpts = { rotY: Math.PI };
     addBossHardware(this, 'dread', 0x8f5cff, 0x252a3d);
   }
@@ -759,9 +791,9 @@ export class DreadSovereign extends BossBase {
     super.update(ctx);
     const { dt, player, proj, game } = ctx;
     const p = this.group.position;
-    // dreadnought: ponderous but deliberate lunges forward and broadside strafes
-    const aggro = this.phase === 3 ? 1.35 : this.phase === 2 ? 1.1 : 0.9;
-    this._maneuver(dt, player, { xRange: 86, yBase: 34, yRange: 18, zNear: -175, zFar: -360, speed: aggro });
+    // dreadnought: looming forward lunges and broadside sweeps at close-mid range
+    const aggro = this.phase === 3 ? 1.4 : this.phase === 2 ? 1.15 : 0.95;
+    this._maneuver(dt, player, { xRange: 68, yBase: 30, yRange: 14, zNear: -118, zFar: -225, speed: aggro });
     this.group.rotation.z = damp(this.group.rotation.z, Math.cos(this.time * 0.3) * 0.05, 2, dt);
 
     const turretsLeft = this.turrets.filter((t) => t.alive).length;
@@ -821,7 +853,7 @@ export class DreadSovereign extends BossBase {
     this.droneCd -= dt;
     if (this.droneCd <= 0 && this.phase >= 2) {
       this.droneCd = this.phase === 3 ? 6 : 9;
-      game.enemies.formation('drone', 3, 'vee', { y: 22, z: -500 });
+      game.enemies.formation('drone', 3, 'vee', { y: 22, z: -290 });
     }
   }
 }
@@ -848,9 +880,9 @@ export class ObsidianMatriarch extends BossBase {
     this.core = this.addWeak(new THREE.Vector3(0, 3, -20), 6.0, 104, 0xa878ff);
     this.core.active = false;
     this.bodyRadius = 38;
-    this.group.position.set(0, 38, -700);
-    this.fireCd = 1.8; this.spawnCd = 7.5; this.phase = 1;
-    scaleBoss(this, 1.65);
+    this.group.position.set(0, 34, -420);
+    this.fireCd = 1.7; this.spawnCd = 7.5; this.phase = 1;
+    scaleBoss(this, 1.72);
     this._modelKey = 'matriarch'; this._modelOpts = { rotY: Math.PI };
     addBossHardware(this, 'matriarch', 0xa878ff, 0x1a1830);
   }
@@ -858,7 +890,7 @@ export class ObsidianMatriarch extends BossBase {
     super.update(ctx);
     const { dt, player, proj, game } = ctx;
     const p = this.group.position;
-    this._maneuver(dt, player, { xRange: 92, yBase: 40, yRange: 18, zNear: -175, zFar: -370, speed: this.phase === 3 ? 1.3 : 0.92 });
+    this._maneuver(dt, player, { xRange: 72, yBase: 34, yRange: 15, zNear: -116, zFar: -225, speed: this.phase === 3 ? 1.35 : 0.98 });
     const live = this.turrets.filter((t) => t.alive);
     if (live.length === 0 && this.phase === 1) { this.phase = 2; this.core.active = true; this._phaseBurst(game, 0xa878ff, 1.28); game.bossPhase('REACTOR EXPOSED!'); }
     if (this.phase === 2 && this.hp < this.maxHp * 0.34) { this.phase = 3; this._phaseBurst(game, 0xff825e, 1.48); game.bossPhase('MATRIARCH OVERDRIVE!'); }
@@ -882,7 +914,7 @@ export class ObsidianMatriarch extends BossBase {
     this.spawnCd -= dt;
     if (this.spawnCd <= 0 && this.phase >= 2) {
       this.spawnCd = this.phase === 3 ? 5.5 : 8.5;
-      game.enemies.formation('phantom', this.phase === 3 ? 3 : 2, 'sides', { y: 48, z: -520, noScale: true });
+      game.enemies.formation('phantom', this.phase === 3 ? 3 : 2, 'sides', { y: 38, z: -295, noScale: true });
     }
   }
 }
@@ -907,9 +939,9 @@ export class RiftHarbinger extends BossBase {
     this.core = this.addWeak(new THREE.Vector3(0, 10, -10), 7.0, 126, 0xffd26b);
     this.core.active = false;
     this.bodyRadius = 42;
-    this.group.position.set(0, 38, -740);
-    this.fireCd = 1.7; this.ringCd = 4.5; this.spawnCd = 7.0; this.phase = 1;
-    scaleBoss(this, 1.45);
+    this.group.position.set(0, 36, -440);
+    this.fireCd = 1.6; this.ringCd = 4.5; this.spawnCd = 7.0; this.phase = 1;
+    scaleBoss(this, 1.52);
     this._modelKey = 'harbinger'; this._modelOpts = {};
     addBossHardware(this, 'harbinger', 0x62d8ff, 0x17243a);
   }
@@ -917,7 +949,7 @@ export class RiftHarbinger extends BossBase {
     super.update(ctx);
     const { dt, player, proj, game } = ctx;
     const p = this.group.position;
-    this._maneuver(dt, player, { xRange: 68, yBase: 40, yRange: 12, zNear: -185, zFar: -365, speed: this.phase === 3 ? 1.15 : 0.78, bank: false });
+    this._maneuver(dt, player, { xRange: 58, yBase: 36, yRange: 11, zNear: -124, zFar: -235, speed: this.phase === 3 ? 1.2 : 0.85, bank: false });
     this.group.rotation.y += dt * (this.phase === 3 ? 0.32 : 0.18);
     const live = this.pylons.filter((w) => w.alive);
     if (live.length === 0 && this.phase === 1) { this.phase = 2; this.core.active = true; this._phaseBurst(game, 0x62d8ff, 1.32); game.bossPhase('RIFT CORE EXPOSED!'); }
@@ -946,7 +978,7 @@ export class RiftHarbinger extends BossBase {
     this.spawnCd -= dt;
     if (this.spawnCd <= 0 && this.phase >= 2) {
       this.spawnCd = this.phase === 3 ? 5 : 8;
-      game.enemies.formation(this.phase === 3 ? 'harrier' : 'phantom', this.phase === 3 ? 3 : 2, 'vee', { y: 42, z: -520, noScale: true });
+      game.enemies.formation(this.phase === 3 ? 'harrier' : 'phantom', this.phase === 3 ? 3 : 2, 'vee', { y: 36, z: -295, noScale: true });
     }
   }
 }

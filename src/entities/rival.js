@@ -14,8 +14,8 @@ export class RivalDuel {
   constructor(scene, game) {
     this.scene = scene;
     this.game = game;
-    this.mesh = buildArwing({ wing: 0x24222e, darkWing: 0x0c0d14, engine: 0xff3b52 });
-    this.mesh.scale.setScalar(1.05);
+    this.mesh = buildArwing({ wing: 0xdc2848, darkWing: 0x161224, engine: 0xff3b52, variant: 'rival' });
+    this.mesh.scale.setScalar(1.36);
     this.mesh.visible = false;
     scene.add(this.mesh);
     this.pos = new THREE.Vector3();
@@ -23,6 +23,7 @@ export class RivalDuel {
     this.wp = new THREE.Vector3();
     this.active = false;
     this.hp = 1; this.maxHp = 1;
+    this.recoil = 0;
     this.taunts = [
       "That the best you've got, Bowie?",
       "Too slow! You'll never hit me.",
@@ -34,11 +35,11 @@ export class RivalDuel {
   start() {
     this.active = true;
     this.hp = this.maxHp = 100;
-    this.pos.set(0, 34, -230);
+    this.pos.set(0, 26, -155);
     this.vel.set(0, 0, 40);
     this.mesh.visible = true;
     this.mesh.position.copy(this.pos);
-    this.wpT = 0; this.fireCd = 1.6; this.tauntT = 5; this.flash = 0; this.tailWarn = 0;
+    this.wpT = 0; this.fireCd = 1.4; this.tauntT = 5; this.flash = 0; this.tailWarn = 0; this.recoil = 0;
     this._newWaypoint();
     this.game.hud.showBoss('THORNE — RIVAL', 1);
     this.game.hud.setBossHp(1);
@@ -55,14 +56,14 @@ export class RivalDuel {
 
   _newWaypoint() {
     const P = this.game.player;
-    this.wpT = rand(1.4, 2.6);
-    if (Math.random() < 0.32) {
-      // dive onto the player's tail (behind the camera-facing plane)
-      this.wp.set(P.x + rand(-14, 14), P.y + rand(-6, 10), PLAYER_Z + rand(24, 46));
+    this.wpT = rand(1.3, 2.3);
+    if (Math.random() < 0.30) {
+      // dive onto the player's tail
+      this.wp.set(P.x + rand(-14, 14), P.y + rand(-6, 10), PLAYER_Z + rand(20, 38));
       this._tailing = true;
     } else {
-      // strafe / swoop somewhere in the forward arena
-      this.wp.set(rand(-140, 140), rand(14, 115), rand(-230, -50));
+      // tight close-quarters dogfight passes right in front of the cockpit!
+      this.wp.set(clamp(P.x * 0.45 + rand(-88, 88), -145, 145), rand(14, 72), rand(-142, -40));
       this._tailing = false;
     }
   }
@@ -76,22 +77,27 @@ export class RivalDuel {
     _v1.copy(this.wp).sub(this.pos);
     const dist = _v1.length();
     if (dist > 1) _v1.multiplyScalar(1 / dist);
-    const speed = this._tailing ? 108 : 90;
-    this.vel.lerp(_v1.multiplyScalar(speed), Math.min(1, dt * 2.4));
+    const speed = this._tailing ? 105 : 88;
+    this.vel.lerp(_v1.multiplyScalar(speed), Math.min(1, dt * 2.6));
     this.pos.addScaledVector(this.vel, dt);
-    // keep inside the arena vertically / laterally
-    this.pos.x = clamp(this.pos.x, -260, 260);
-    this.pos.y = clamp(this.pos.y, 6, 150);
-    this.pos.z = clamp(this.pos.z, -320, PLAYER_Z + 55);
+    this.pos.x = clamp(this.pos.x, -175, 175);
+    this.pos.y = clamp(this.pos.y, 7, 98);
+    this.pos.z = clamp(this.pos.z, -210, PLAYER_Z + 48);
     this.mesh.position.copy(this.pos);
-    // bank into the turn + face travel direction
     _v2.copy(this.pos).add(this.vel);
     this.mesh.lookAt(_v2);
-    this.mesh.rotation.z += Math.sin(performance.now() * 0.004) * 0.2;
+    this.recoil = Math.max(0, this.recoil - dt * 6);
+    this.mesh.rotation.z += Math.sin(performance.now() * 0.004) * 0.2 + this.recoil * 0.28;
+    this.mesh.scale.setScalar(1.36 * (1 + this.recoil * 0.07));
 
-    // engine flicker
+    // engine flicker + 3D plasma plumes
     const gg = this.mesh.userData.engineGlow;
-    if (gg) gg.scale.setScalar(0.9 + Math.sin(performance.now() * 0.03) * 0.12);
+    if (gg) gg.scale.setScalar(0.95 + Math.sin(performance.now() * 0.03) * 0.14);
+    const plumes = this.mesh.userData.enginePlumes;
+    if (plumes) {
+      const len = 1.05 + Math.sin(performance.now() * 0.048) * 0.18;
+      for (const pl of plumes) pl.scale.set(1.0, 1.0, len);
+    }
 
     // on the player's tail → warn + fire from behind
     const onTail = this.pos.z > PLAYER_Z + 10;
@@ -103,7 +109,7 @@ export class RivalDuel {
     // fire at the player
     this.fireCd -= dt;
     if (this.fireCd <= 0 && this.hp > 0) {
-      this.fireCd = onTail ? 0.7 : rand(0.9, 1.45);
+      this.fireCd = onTail ? 0.72 : rand(0.9, 1.45);
       _v1.set(P.x + P.vx * 0.08, P.y + P.vy * 0.06, PLAYER_Z).sub(this.pos);
       proj.fireEnemy(this.pos.clone(), _v1.clone(), onTail ? 'bolt' : 'plasma');
     }
@@ -113,35 +119,33 @@ export class RivalDuel {
     if (this.tauntT <= 0) { this.tauntT = rand(6, 10); game.hud.say('THORNE', pick(this.taunts), 2.6); }
 
     // ---- player weapons vs rival ----
-    const R = 4.2;
+    const R = 5.6;
     for (const b of proj.lasers) {
       if (!b.active) continue;
-      if (b.mesh.position.distanceTo(this.pos) < R + 1.5) {
+      if (b.mesh.position.distanceTo(this.pos) < R + 1.8) {
         b.active = false; b.mesh.visible = false;
         this._hit(b.dmg, game);
       }
     }
     for (const c of proj.charges) {
       if (!c.active) continue;
-      if (c.mesh.position.distanceTo(this.pos) < R + 3) { c.active = false; c.mesh.visible = false; game.explodeAt(this.pos, true); this._hit(6, game); }
+      if (c.mesh.position.distanceTo(this.pos) < R + 3.5) { c.active = false; c.mesh.visible = false; game.explodeAt(this.pos, true); this._hit(6, game); }
     }
     for (const b of proj.bombs) {
       if (!b.active) continue;
       if (b.mesh.position.distanceTo(this.pos) < R + 6) game._detonateBomb(b, false);
     }
-    // area weapons (bomb/charge blasts) also damage via proximity handled by _hit calls above
 
     // ram
     _v1.set(P.x, P.y, PLAYER_Z);
     if (this.pos.distanceTo(_v1) < R + P.radius && P.invuln <= 0 && !P.rolling) {
       game.damagePlayer(12, 'ram');
-      this.pos.z = PLAYER_Z - 30; // bounce forward
+      this.pos.z = PLAYER_Z - 32;
     }
 
     if (this.flash > 0) { this.flash -= dt; }
     game.hud.setBossHp(this.hp / this.maxHp);
 
-    // off-screen / on-screen indicator
     const s = game._toScreen(this.pos);
     game.hud.rivalMarker(s, this.flash > 0);
 
@@ -150,9 +154,11 @@ export class RivalDuel {
 
   _hit(dmg, game) {
     this.hp = Math.max(0, this.hp - dmg);
-    this.flash = 0.08;
-    audio.hitTick();
-    game.particles.emit(this.pos.x, this.pos.y, this.pos.z, { count: 6, speed: 16, color: 0xffd0d8, life: 0.3, size: 2 });
+    this.flash = 0.09;
+    this.recoil = 1.0;
+    audio.enemyHit(2);
+    game.hud.hitConfirm?.();
+    game.particles.laserImpact(this.pos.x, this.pos.y, this.pos.z, 2, true);
   }
 
   _defeat(game) {

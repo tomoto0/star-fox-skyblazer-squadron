@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STAR FOX — SKYBLAZER SQUADRON</title>
 <!-- SOCIAL_META: server.mjs injects absolute OGP and X Card tags for every HTML response. -->
-<link rel="stylesheet" href="./css/style.css?v=rankings-v48">
+<link rel="stylesheet" href="./css/style.css?v=artisan-v59">
 <script type="importmap">
 {
   "imports": {
@@ -25,8 +25,16 @@
     <div id="pilot-panel">
       <div id="portrait-frame"><img src="./assets/ui/portrait_bowie.png" alt="Bowie"></div>
       <div id="pilot-bars">
-        <div class="bar" id="bar-hp"><div class="bar-fill" id="bar-hp-fill"></div></div>
-        <div class="bar" id="bar-boost"><div class="bar-fill" id="bar-boost-fill"></div></div>
+        <div class="bar" id="bar-hp">
+          <div class="bar-lag" id="bar-hp-lag"></div>
+          <div class="bar-fill" id="bar-hp-fill"></div>
+          <span class="bar-label">SHIELD</span>
+          <span class="bar-val" id="bar-hp-val">100</span>
+        </div>
+        <div class="bar" id="bar-boost">
+          <div class="bar-fill" id="bar-boost-fill"></div>
+          <span class="bar-label">BOOST</span>
+        </div>
         <div id="pips-row">
           <div id="laser-pips"></div>
           <div id="bomb-gems"></div>
@@ -37,10 +45,25 @@
     <!-- left : wingmate status -->
     <div id="wing-status" class="hidden"></div>
 
-    <!-- top right : score + lives -->
+    <!-- top center : tactical wave progress (auto-hides during boss bar) -->
+    <div id="wave-status">
+      <div id="wave-status-row">
+        <span id="wave-tag">W01 / 16</span>
+        <span id="wave-zone">AZURE SEA</span>
+        <span id="wave-hostiles">HOSTILES 00</span>
+      </div>
+      <div id="wave-progress"><div id="wave-progress-fill"></div></div>
+    </div>
+
+    <!-- top right : score + lives + quick tools -->
     <div id="score-panel">
       <div id="score">0000</div>
       <div id="lives"><span class="ship-icon">✈</span><span id="lives-num">x 3</span></div>
+      <div id="hud-tools" aria-label="Quick controls">
+        <button type="button" class="hud-tool" id="btn-hud-autofire" title="Auto-Fire (F)">AUTO</button>
+        <button type="button" class="hud-tool" id="btn-hud-mute" title="Toggle Audio (M)">SFX</button>
+        <button type="button" class="hud-tool" id="btn-hud-pause" title="Pause & Options (ESC)">MENU</button>
+      </div>
     </div>
 
     <!-- boss bar -->
@@ -69,11 +92,21 @@
     <!-- item pickup callout -->
     <div id="callout" class="hidden"><span id="callout-icon">◆</span><span id="callout-text">LASER UP</span></div>
 
-    <!-- combo counter -->
-    <div id="combo" class="hidden"><b id="combo-x">x2</b><span>COMBO</span></div>
+    <!-- airborne bomb manual-detonation prompt -->
+    <div id="bomb-prompt" class="hidden"><span class="bp-key">B</span><span>DETONATE BOMB!</span></div>
+
+    <!-- combo counter + countdown decay bar -->
+    <div id="combo" class="hidden">
+      <b id="combo-x">x2</b>
+      <span>COMBO</span>
+      <div id="combo-bar"><div id="combo-bar-fill"></div></div>
+    </div>
 
     <!-- rival off-screen tracker -->
     <div id="rival-marker" class="hidden"><svg viewBox="0 0 40 40"><path d="M20 4 L34 32 L20 24 L6 32 Z"/></svg><span>THORNE</span></div>
+
+    <!-- off-screen threat direction chevrons -->
+    <div id="threat-indicators"></div>
 
     <!-- dialogue -->
     <div id="dialogue" class="hidden">
@@ -86,22 +119,33 @@
 
     <!-- reticles (star-fox double reticle) -->
     <svg id="reticle-far" class="reticle" viewBox="0 0 100 100">
-      <path d="M20 8 h-8 a4 4 0 0 0 -4 4 v8 M80 8 h8 a4 4 0 0 1 4 4 v8 M20 92 h-8 a4 4 0 0 1 -4 -4 v-8 M80 92 h8 a4 4 0 0 0 4 -4 v-8" />
+      <path d="M22 10 h-10 a4 4 0 0 0 -4 4 v10 M78 10 h10 a4 4 0 0 1 4 4 v10 M22 90 h-10 a4 4 0 0 1 -4 -4 v-10 M78 90 h10 a4 4 0 0 0 4 -4 v-10" />
+      <polygon class="ret-diamond" points="50,33 67,50 50,67 33,50" />
     </svg>
     <svg id="reticle-near" class="reticle" viewBox="0 0 100 100">
       <path d="M28 6 h-14 a8 8 0 0 0 -8 8 v14 M72 6 h14 a8 8 0 0 1 8 8 v14 M28 94 h-14 a8 8 0 0 1 -8 -8 v-14 M72 94 h14 a8 8 0 0 0 8 -8 v-14" />
-      <line x1="50" y1="44" x2="50" y2="56"/><line x1="44" y1="50" x2="56" y2="50"/>
+      <line x1="50" y1="38" x2="50" y2="45"/><line x1="50" y1="55" x2="50" y2="62"/>
+      <line x1="38" y1="50" x2="45" y2="50"/><line x1="55" y1="50" x2="62" y2="50"/>
+      <circle class="ret-dot" cx="50" cy="50" r="2.2" />
     </svg>
     <div id="lock-markers"></div>
+    <div id="kill-popups"></div>
 
     <!-- charge meter under reticle -->
     <div id="charge-ring" class="hidden"><svg viewBox="0 0 60 60"><circle class="cbg" cx="30" cy="30" r="24"/><circle class="cfg" id="charge-arc" cx="30" cy="30" r="24"/></svg></div>
 
     <!-- screen fx -->
+    <div id="boost-fx"></div>
     <div id="vignette"></div>
     <div id="hurt-flash"></div>
     <div id="white-flash"></div>
+
+    <!-- compact FPS & adaptive quality monitor (toggleable in Flight Options) -->
+    <div id="perf-badge" class="hidden" aria-live="off">60 FPS · AUTO</div>
   </div>
+
+  <!-- WebGL context recovery notice -->
+  <div id="context-lost-banner" class="hidden" role="status">⚡ GRAPHICS CONTEXT RECOVERING…</div>
 
   <!-- ===================== MENUS ===================== -->
   <div id="title-screen">
@@ -112,17 +156,21 @@
       <div id="title-sub">SKYBLAZER SQUADRON</div>
       <div id="title-press" class="blink">PRESS ENTER / CLICK TO START</div>
       <div id="title-controls">
-        <div class="ctl"><b>MOVE</b> WASD / ARROWS / MOUSE</div>
-        <div class="ctl"><b>FIRE</b> SPACE / CLICK &nbsp;<b>CHARGE LOCK-ON</b> HOLD C / RIGHT-CLICK</div>
-        <div class="ctl"><b>BARREL ROLL</b> ⌘ CMD + ← / → &nbsp;— deflects enemy fire</div>
-        <div class="ctl"><b>BOOST</b> SHIFT &nbsp;<b>BRAKE</b> CTRL</div>
-        <div class="ctl"><b>BOMB</b> B to launch &nbsp;·&nbsp; B again = BIG detonation 💥</div>
-        <div class="ctl"><b>PAUSE</b> P &nbsp;<b>MUTE</b> M</div>
+        <div class="ctl"><b>MOVE</b> WASD / ARROWS / MOUSE / GAMEPAD</div>
+        <div class="ctl"><b>FIRE</b> SPACE / CLICK / <b>F</b> AUTO-FIRE &nbsp;·&nbsp; <b>3× LOCK-ON</b> HOLD C / RIGHT-CLICK</div>
+        <div class="ctl"><b>BARREL ROLL</b> DOUBLE-TAP A/D or ←/→, Q/E, ⌘+←/→ — deflects fire back!</div>
+        <div class="ctl"><b>BOOST</b> SHIFT &nbsp;·&nbsp; <b>BRAKE</b> CTRL &nbsp;·&nbsp; <b>BOMB</b> B (2nd tap = MEGA BLAST 💥)</div>
+        <div class="ctl"><b>PAUSE / OPTIONS</b> ESC / P &nbsp;·&nbsp; <b>MUTE</b> M</div>
       </div>
       <div id="title-unlock" class="hidden">AFTERBURNER+ UNLOCKED &nbsp;·&nbsp; PRESS <b>Q</b> FOR SIGNAL ARCHIVE</div>
-      <button type="button" id="title-ranking-button" aria-haspopup="dialog" aria-controls="leaderboard-screen">
-        <span class="title-ranking-mark">✦</span><span>PILOT RANKINGS</span><small>TOP 30 &nbsp;·&nbsp; PRESS R</small>
-      </button>
+      <div class="title-actions">
+        <button type="button" id="title-ranking-button" aria-haspopup="dialog" aria-controls="leaderboard-screen">
+          <span class="title-ranking-mark">✦</span><span>PILOT RANKINGS</span><small>TOP 30 &nbsp;·&nbsp; R</small>
+        </button>
+        <button type="button" id="title-settings-button" aria-haspopup="dialog" aria-controls="pause-screen">
+          <span class="title-settings-mark">⚙</span><span>FLIGHT OPTIONS</span><small>O</small>
+        </button>
+      </div>
     </div>
     <div id="title-foot">WAVE 1 – 16 &nbsp;·&nbsp; 4 COMBAT ZONES &nbsp;·&nbsp; 6 BOSSES</div>
   </div>
@@ -200,7 +248,7 @@
       <div class="mc-row"><span>RINGS</span><b id="res-rings">0</b></div>
       <div class="mc-row total"><span>WAVE BONUS</span><b id="res-bonus">+0</b></div>
     </div>
-    <div class="mc-foot blink">NEXT WAVE INCOMING…</div>
+    <div class="mc-foot blink">NEXT WAVE INCOMING… (SPACE / ENTER TO SKIP)</div>
   </div>
 
   <div id="gameover-screen" class="menu-card hidden">
@@ -209,7 +257,10 @@
       <div class="mc-row"><span>FINAL SCORE</span><b id="go-score">0</b></div>
       <div class="mc-row"><span>REACHED</span><b id="go-wave">WAVE 1</b></div>
     </div>
-    <div class="mc-foot blink">PRESS ENTER TO RETRY</div>
+    <div class="mc-actions">
+      <button type="button" id="btn-go-retry" class="mc-btn primary">RETRY SORTIE <b>ENTER</b></button>
+      <button type="button" id="btn-go-title" class="mc-btn">TITLE SCREEN</button>
+    </div>
   </div>
 
   <div id="victory-screen" class="menu-card hidden">
@@ -220,7 +271,9 @@
       <div class="mc-row"><span>ACCURACY</span><b id="vic-acc">0%</b></div>
     </div>
     <div class="mc-foot">THE LYLAT COAST IS SAFE. &nbsp;GREAT FLYING, BOWIE!</div>
-    <div class="mc-foot blink">PRESS ENTER FOR TITLE</div>
+    <div class="mc-actions">
+      <button type="button" id="btn-vic-title" class="mc-btn primary">RETURN TO TITLE <b>ENTER</b></button>
+    </div>
   </div>
 
   <!-- final-boss epilogue: staged over the surviving 3D scene -->
@@ -246,10 +299,57 @@
     </div>
     <div class="ending-epilogue">THE DUNE SEA IS QUIET. THE COAST IS SAFE. <em>GREAT FLYING, BOWIE.</em></div>
     <div id="ending-unlock" class="ending-unlock">AFTERBURNER+ // VETERAN ROUTE UNLOCKED</div>
-    <div class="ending-prompt blink">PRESS ENTER TO RETURN TO TITLE</div>
+    <button type="button" id="btn-end-title" class="ending-prompt blink">PRESS ENTER / CLICK TO RETURN TO TITLE</button>
   </div>
 
-  <div id="pause-screen" class="hidden"><div id="pause-box">PAUSED<br><span>press P to resume</span></div></div>
+  <!-- interactive cockpit pause & flight options modal -->
+  <div id="pause-screen" class="hidden" aria-hidden="true">
+    <section class="pause-frame" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+      <div class="pause-kicker" id="pause-kicker">COCKPIT TACTICAL MENU</div>
+      <h2 id="pause-title">PAUSED</h2>
+      <div class="pause-options">
+        <div class="opt-row">
+          <div class="opt-info"><b>INVERT Y-AXIS</b><span>Flip vertical steering (上下反転)</span></div>
+          <button type="button" class="opt-toggle" id="opt-invert-y" aria-pressed="false">OFF</button>
+        </div>
+        <div class="opt-row">
+          <div class="opt-info"><b>AUTO-FIRE</b><span>Continuous primary laser [F]</span></div>
+          <button type="button" class="opt-toggle" id="opt-autofire" aria-pressed="false">OFF</button>
+        </div>
+        <div class="opt-row">
+          <div class="opt-info"><b>AUDIO</b><span>Master sound &amp; music [M]</span></div>
+          <button type="button" class="opt-toggle on" id="opt-audio" aria-pressed="true">ON</button>
+        </div>
+        <div class="opt-row">
+          <div class="opt-info"><b>MASTER VOLUME</b><span id="opt-vol-val">100%</span></div>
+          <input type="range" class="opt-range" id="opt-volume" min="0" max="100" step="5" value="100" aria-label="Master Volume">
+        </div>
+        <div class="opt-row">
+          <div class="opt-info"><b>STEERING SENSITIVITY</b><span id="opt-sens-val">1.0x</span></div>
+          <input type="range" class="opt-range" id="opt-sensitivity" min="60" max="150" step="5" value="100" aria-label="Steering Sensitivity">
+        </div>
+        <div class="opt-row">
+          <div class="opt-info"><b>GRAPHICS QUALITY</b><span id="opt-gfx-desc">Auto-adjusts to keep 60 FPS</span></div>
+          <button type="button" class="opt-toggle opt-cycle on" id="opt-graphics">AUTO</button>
+        </div>
+        <div class="opt-row">
+          <div class="opt-info"><b>PERFORMANCE HUD</b><span>Show live FPS &amp; quality badge</span></div>
+          <button type="button" class="opt-toggle" id="opt-perf-hud" aria-pressed="false">OFF</button>
+        </div>
+      </div>
+      <div class="pause-legend">
+        <span><b>ROLL COUNTER</b> Deflected shots kill enemies!</span>
+        <span><b>3× LOCK-ON</b> Hold C / Right-Click &amp; sweep</span>
+        <span><b>INTERCEPT</b> Shoot down enemy missiles</span>
+        <span id="pause-gp-status"><b>GAMEPAD</b> Ready when connected</span>
+      </div>
+      <div class="pause-actions">
+        <button type="button" id="btn-pause-resume" class="pause-btn primary">RESUME FLIGHT <b>ESC</b></button>
+        <button type="button" id="btn-pause-restart" class="pause-btn">RESTART WAVE</button>
+        <button type="button" id="btn-pause-title" class="pause-btn danger">RETURN TO TITLE</button>
+      </div>
+    </section>
+  </div>
 
   <!-- touch controls: visible only during mobile gameplay -->
   <div id="touch-controls" class="hidden" aria-label="モバイル操作">
@@ -288,6 +388,6 @@
     </div>
   </div>
 </div>
-<script type="module" src="./src/main.js?v=rankings-v48"></script>
+<script type="module" src="./src/main.js?v=artisan-v59"></script></script>
 </body>
 </html>

@@ -6,9 +6,9 @@ const TEX = './assets/textures/';
 const CHUNK_LEN = 300;
 const NUM_CHUNKS = 8;
 const TOTAL_LEN = CHUNK_LEN * NUM_CHUNKS;
-const FIELD = 300;            // lateral half-extent the player can reach
-const CEIL = 190;             // vertical ceiling the player can climb to
-const COLLIDE_REACH = 340;    // beyond this a prop is pure background — no collider
+const FIELD = 240;            // lateral half-extent the player can reach
+const CEIL = 140;             // vertical ceiling the player can climb to
+const COLLIDE_REACH = 340;    // cover reachable flank cliffs & walls; beyond this is pure horizon scenery
 
 const noise = makeNoise(7.31);
 const noise2 = makeNoise(19.77);
@@ -16,10 +16,10 @@ const noise2 = makeNoise(19.77);
 // Every environmental layer reads the same route definition: terrain leaves it
 // open, installations flank it, and beacons reveal its curve at a glance.
 const ROUTE_SPECS = {
-  sea:   { amp: 68, wavelength: 760, half: 88, phase: 0.2 },
-  gorge: { amp: 52, wavelength: 590, half: 76, phase: 1.1 },
-  ember: { amp: 42, wavelength: 510, half: 70, phase: 2.0 },
-  dune:  { amp: 92, wavelength: 880, half: 96, phase: 2.7 },
+  sea:   { amp: 56, wavelength: 740, half: 78, phase: 0.2 },
+  gorge: { amp: 44, wavelength: 580, half: 70, phase: 1.1 },
+  ember: { amp: 38, wavelength: 510, half: 66, phase: 2.0 },
+  dune:  { amp: 72, wavelength: 860, half: 84, phase: 2.7 },
 };
 
 export function flightRoute(zoneId, worldZ = 0) {
@@ -31,16 +31,22 @@ export function flightRoute(zoneId, worldZ = 0) {
   };
 }
 
-// scratch objects for bounding-box collider computation
+// scratch objects for bounding-box collider computation & zero-GC vertex colouring
 const _box = new THREE.Box3();
 const _bc = new THREE.Vector3();
 const _bs = new THREE.Vector3();
+const _tc1 = new THREE.Color();
+const _tc2 = new THREE.Color();
+const _tc3 = new THREE.Color();
+const _tcOut = new THREE.Color();
+const _sparkTint = new THREE.Color(0xffedbe);
+const markShared = (m) => { if (m) { m.userData = m.userData || {}; m.userData.shared = true; } return m; };
 
 /* ---------------- shared materials (CC0 detail textures × vertex-colour palette) ---------------- */
 // detail maps are brightened toward white + desaturated so multiplying them
 // against the vertex-colour palette adds surface grain without dimming the hue
 const rockTex = loadDetailTexture(TEX + 'rock_diff.jpg', { repeat: 2.6, brightness: 2.5, contrast: 0.5, desat: 0.8 });
-const rockMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: rockTex });
+const rockMat = markShared(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: rockTex }));
 rockMat.flatShading = true;
 
 // Each zone uses a distinct CC0 rock surface. The high-poly source scans are
@@ -53,10 +59,10 @@ function makeCliffMaterial(diffusePath, normalPath, opts = {}) {
   const normal = new THREE.TextureLoader().load(TEX + normalPath);
   normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
   normal.repeat.set(repeat, repeat);
-  const material = new THREE.MeshToonMaterial({
+  const material = markShared(new THREE.MeshToonMaterial({
     vertexColors: true, gradientMap: toonGradient(), map, normalMap: normal,
     normalScale: new THREE.Vector2(opts.normal ?? 0.4, opts.normal ?? 0.4),
-  });
+  }));
   material.flatShading = true;
   return material;
 }
@@ -74,8 +80,12 @@ const CLIFF_MATS = {
 const cliffMat = CLIFF_MATS.sea;
 // Shared wet-rock layer for sea stacks. Reusing this material makes the tide line
 // readable without adding texture fetches or per-stack material allocations.
-const seaWetMat = toonMat(0x18384f, { emissive: 0x245a78, emissiveIntensity: 0.22, flat: true });
-const seaSaltMat = toonMat(0x6e91a4, { emissive: 0xa8d8e8, emissiveIntensity: 0.10, flat: true });
+const seaWetMat = markShared(toonMat(0x163c58, { emissive: 0x20688c, emissiveIntensity: 0.26, flat: true }));
+const seaSaltMat = markShared(toonMat(0xb6e8f2, { emissive: 0xdffbff, emissiveIntensity: 0.34, flat: true }));
+const seaFoamMat = markShared(new THREE.MeshBasicMaterial({
+  color: 0xe6fbff, transparent: true, opacity: 0.62, side: THREE.DoubleSide,
+  depthWrite: false, fog: true,
+}));
 
 // Monumental gate and tunnel geometry must remain legible while browser texture
 // decoding is in flight. This map-free material retains the same per-vertex zone
@@ -83,18 +93,18 @@ const seaSaltMat = toonMat(0x6e91a4, { emissive: 0xa8d8e8, emissiveIntensity: 0.
 const STABLE_CLIFF_MATS = {};
 function stableCliffMaterial(zoneId) {
   if (STABLE_CLIFF_MATS[zoneId]) return STABLE_CLIFF_MATS[zoneId];
-  const m = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), color: 0xffffff, side: THREE.DoubleSide, fog: true });
+  const m = markShared(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), color: 0xffffff, side: THREE.DoubleSide, fog: true }));
   m.flatShading = true;
   STABLE_CLIFF_MATS[zoneId] = m;
   return m;
 }
 
 const sandTex = loadDetailTexture(TEX + 'sand_diff.jpg', { repeat: 18, brightness: 2.7, contrast: 0.45, desat: 0.85 });
-const sandMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: sandTex });
+const sandMat = markShared(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: sandTex }));
 sandMat.flatShading = true;
 
 const groundRockTex = loadDetailTexture(TEX + 'rock_diff.jpg', { repeat: 15, brightness: 2.4, contrast: 0.5, desat: 0.8 });
-const emberGroundMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: groundRockTex });
+const emberGroundMat = markShared(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: groundRockTex }));
 emberGroundMat.flatShading = true;
 
 // Zone floor materials are separate from cliff surfaces: their high repeat count
@@ -108,10 +118,10 @@ function makeFloorMaterial(diffusePath, normalPath, opts = {}) {
   const normal = new THREE.TextureLoader().load(TEX + normalPath);
   normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
   normal.repeat.set(repeat, repeat);
-  const material = new THREE.MeshToonMaterial({
+  const material = markShared(new THREE.MeshToonMaterial({
     vertexColors: true, gradientMap: toonGradient(), map, normalMap: normal,
     normalScale: new THREE.Vector2(opts.normal ?? 0.30, opts.normal ?? 0.30),
-  });
+  }));
   material.flatShading = true;
   return material;
 }
@@ -241,6 +251,7 @@ function makeWaterMaterial(opts) {
     `,
   });
   material.userData.fluid = true;
+  material.userData.shared = true;
   return material;
 }
 const WATER_MATS = {
@@ -272,8 +283,75 @@ function fluidRibbon(width, length, material, y = 0.7) {
 }
 
 const snowTex = loadDetailTexture(TEX + 'snow_diff.jpg', { repeat: 2.2, brightness: 1.9, contrast: 0.6, desat: 0.4 });
-const snowCapMat = new THREE.MeshToonMaterial({ gradientMap: toonGradient(), map: snowTex, color: 0xeef4fb });
+const snowCapMat = markShared(new THREE.MeshToonMaterial({ gradientMap: toonGradient(), map: snowTex, color: 0xeef4fb }));
 snowCapMat.flatShading = true;
+
+/** Shared procedural armored hull panel map for engineered terrain structures (zero per-chunk alloc). */
+function makeTerrainArmorTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#cfd6e0';
+  g.fillRect(0, 0, 256, 256);
+  const blocks = [
+    [0, 0, 128, 84, '#d8dfe8'], [128, 0, 128, 84, '#c2cad6'],
+    [0, 84, 86, 88, '#c7cfdb'], [86, 84, 170, 88, '#dbe2eb'],
+    [0, 172, 160, 84, '#cdd5e0'], [160, 172, 96, 84, '#bec7d4'],
+  ];
+  for (const [x, y, w, h, col] of blocks) {
+    g.fillStyle = col;
+    g.fillRect(x + 2, y + 2, w - 4, h - 4);
+    g.strokeStyle = 'rgba(255,255,255,0.42)';
+    g.lineWidth = 2;
+    g.strokeRect(x + 3, y + 3, w - 6, h - 6);
+    g.strokeStyle = 'rgba(22,30,44,0.62)';
+    g.lineWidth = 2;
+    g.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    g.fillStyle = 'rgba(28,38,52,0.55)';
+    for (const [rx, ry] of [[x + 8, y + 8], [x + w - 10, y + 8], [x + 8, y + h - 10], [x + w - 10, y + h - 10]]) {
+      g.fillRect(rx, ry, 3, 3);
+    }
+  }
+  g.fillStyle = 'rgba(28,36,50,0.58)';
+  for (let i = 0; i < 5; i++) g.fillRect(102, 102 + i * 11, 134, 4);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.anisotropy = 4;
+  return markShared(tex);
+}
+
+/** Shared procedural illuminated multi-deck window matrix for watchtowers & setpiece citadels. */
+function makeTerrainWindowTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#4a5566';
+  g.fillRect(0, 0, 256, 256);
+  for (let row = 0; row < 8; row++) {
+    const y = row * 32;
+    g.fillStyle = '#252e3e';
+    g.fillRect(0, y, 256, 9);
+    g.fillStyle = '#68768c';
+    g.fillRect(0, y + 9, 256, 3);
+    for (let col = 0; col < 8; col++) {
+      const x = col * 32;
+      const lit = ((row * 3 + col * 5) % 6) !== 0;
+      g.fillStyle = lit ? '#f2fcff' : '#1b2434';
+      g.fillRect(x + 4, y + 14, 24, 13);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.anisotropy = 4;
+  return markShared(tex);
+}
+
+const terrainArmorTex = makeTerrainArmorTexture();
+const terrainWindowTex = makeTerrainWindowTexture();
 
 /* ---------------- shared geometry helpers ---------------- */
 function vertexColoredRock(radius, height, baseColor, topColor, sides = 7) {
@@ -284,7 +362,7 @@ function vertexColoredRock(radius, height, baseColor, topColor, sides = 7) {
   const vertical = clamp(Math.round(height / 15), 4, 12);
   const geo = new THREE.CylinderGeometry(radius * rand(0.46, 0.72), radius, height, radial, vertical, false);
   const pos = geo.attributes.position;
-  const cBase = new THREE.Color(baseColor), cTop = new THREE.Color(topColor);
+  _tc1.set(baseColor); _tc2.set(topColor);
   const colors = new Float32Array(pos.count * 3);
   const phase = rand(TAU);
   const bedding = rand(4.2, 7.2);
@@ -305,8 +383,8 @@ function vertexColoredRock(radius, height, baseColor, topColor, sides = 7) {
     pos.setY(i, y + noise2(theta * 1.2 + phase, yn * 4.6) * height * 0.045);
     const strata = 0.5 + 0.5 * Math.sin(yn * Math.PI * bedding + noise(theta + phase, yn * 2) * 2.8);
     const weather = 0.84 + strata * 0.16 + shelf * 0.35;
-    const c = cBase.clone().lerp(cTop, Math.pow(yn, 1.55)).multiplyScalar(weather);
-    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+    _tcOut.copy(_tc1).lerp(_tc2, Math.pow(yn, 1.55)).multiplyScalar(weather);
+    colors[i * 3] = _tcOut.r; colors[i * 3 + 1] = _tcOut.g; colors[i * 3 + 2] = _tcOut.b;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
@@ -457,28 +535,44 @@ function seaStack(radius, height, base, top) {
   // They are visual-only children of the same rock mass, so collision is unchanged.
   const wetShelf = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.12, radius * 1.28, Math.max(1.1, height * 0.032), 9), seaWetMat);
   wetShelf.position.y = Math.max(0.55, height * 0.12); wetShelf.scale.z = 1.12; g.add(wetShelf);
-  const saltLine = new THREE.Mesh(new THREE.TorusGeometry(radius * 1.06, Math.max(0.16, radius * 0.025), 5, 14), seaSaltMat);
+  const saltLine = new THREE.Mesh(new THREE.TorusGeometry(radius * 1.06, Math.max(0.22, radius * 0.03), 5, 14), seaSaltMat);
   saltLine.rotation.x = Math.PI / 2; saltLine.position.y = Math.max(0.92, height * 0.155); saltLine.scale.z = 1.08; g.add(saltLine);
+  // Dual concentric shoreline surf collars where ocean swells break against the sea stack
+  const surfRing = new THREE.Mesh(new THREE.RingGeometry(radius * 1.24, radius * 1.66, 18), seaFoamMat);
+  surfRing.rotation.x = -Math.PI / 2;
+  surfRing.position.y = 1.95;
+  surfRing.scale.set(1.0, 1.16, 1);
+  g.add(surfRing);
+  const outerSwell = new THREE.Mesh(new THREE.RingGeometry(radius * 1.76, radius * 2.02, 18), seaFoamMat);
+  outerSwell.rotation.x = -Math.PI / 2;
+  outerSwell.position.y = 1.65;
+  outerSwell.scale.set(1.06, 1.18, 1);
+  g.add(outerSwell);
 
   for (let i = 0; i < cluster; i++) {
     const a = (i / cluster) * TAU + rand(-0.45, 0.45);
     const off = i === 0 ? 0 : radius * rand(0.28, 0.72);
-    const h = height * rand(i === 0 ? 0.72 : 0.35, i === 0 ? 1.05 : 0.72);
-    const r = radius * rand(i === 0 ? 0.62 : 0.34, i === 0 ? 0.88 : 0.58);
-    const pillar = makeRock(r, h, base, top, pick([6, 7]));
+    const h = height * rand(i === 0 ? 0.74 : 0.36, i === 0 ? 1.06 : 0.74);
+    const r = radius * rand(i === 0 ? 0.64 : 0.35, i === 0 ? 0.88 : 0.58);
+    const pillar = makeRock(r, h, base, top, pick([7, 8]));
     pillar.position.set(Math.cos(a) * off, h * 0.33, Math.sin(a) * off);
     pillar.rotation.x = Math.sin(a) * rand(0.035, 0.09);
     pillar.rotation.z = -Math.cos(a) * rand(0.035, 0.09);
     g.add(pillar);
-    // A tide-darkened collar and a small wind-cut ledge stop each column from
-    // reading as an untouched primitive while retaining its existing silhouette.
-    const wetCollar = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.94, r * 1.04, Math.max(0.55, h * 0.035), 7), seaWetMat);
+    // Tide-darkened wet rock collar + stratified overhanging cliff cornice
+    const wetCollar = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.94, r * 1.06, Math.max(0.65, h * 0.038), 8), seaWetMat);
     wetCollar.position.set(Math.cos(a) * off, h * 0.12, Math.sin(a) * off);
     wetCollar.rotation.x = pillar.rotation.x; wetCollar.rotation.z = pillar.rotation.z; g.add(wetCollar);
     if (i < 2) {
-      const ledge = makeRock(r * rand(0.70, 0.94), Math.max(2.2, h * 0.055), base, top, 6);
-      ledge.position.set(Math.cos(a) * off + Math.cos(a) * r * 0.18, h * rand(0.38, 0.62), Math.sin(a) * off + Math.sin(a) * r * 0.18);
-      ledge.scale.set(1.45, 0.55, 0.72); g.add(ledge);
+      const ledge = makeRock(r * rand(0.74, 0.98), Math.max(2.4, h * 0.06), base, top, 7);
+      ledge.position.set(Math.cos(a) * off + Math.cos(a) * r * 0.20, h * rand(0.38, 0.64), Math.sin(a) * off + Math.sin(a) * r * 0.20);
+      ledge.scale.set(1.48, 0.55, 0.76); g.add(ledge);
+      // Weathered coastal scrub moss tuft perched atop the highest sea-stack shoulder
+      if (i === 0 && h > 36) {
+        const scrub = mossCap(r * 0.72, 0x3b7c54);
+        scrub.position.set(Math.cos(a) * off, h * 0.76, Math.sin(a) * off);
+        g.add(scrub);
+      }
     }
   }
 
@@ -553,109 +647,189 @@ function snowCap(radius) {
   return new THREE.Mesh(geo, snowCapMat);
 }
 
-/** low-poly conifer for the gorge zone */
+/** Multi-tiered alpine conifer with flared root trunk & sunlit foliage graduation */
 function conifer(scale, trunkCol = 0x6b4a2e, leafCol = 0x3f9b46) {
   const g = new THREE.Group();
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5 * scale, 0.7 * scale, 3 * scale, 5), toonMat(trunkCol, { flat: true }));
-  trunk.position.y = 1.5 * scale;
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.42 * scale, 0.88 * scale, 3.6 * scale, 6), toonMat(trunkCol, { flat: true }));
+  trunk.position.y = 1.8 * scale;
   g.add(trunk);
-  for (let i = 0; i < 3; i++) {
-    const cone = new THREE.Mesh(new THREE.ConeGeometry((2.4 - i * 0.55) * scale, 3 * scale, 6), toonMat(leafCol, { flat: true }));
-    cone.position.y = (3 + i * 2) * scale;
+  const baseLeaf = new THREE.Color(leafCol);
+  const darkLeaf = baseLeaf.clone().multiplyScalar(0.76);
+  const litLeaf = baseLeaf.clone().lerp(new THREE.Color(0xb8e87c), 0.24);
+  for (let i = 0; i < 4; i++) {
+    const t = i / 3;
+    const col = darkLeaf.clone().lerp(litLeaf, t).getHex();
+    const cone = new THREE.Mesh(new THREE.ConeGeometry((2.7 - i * 0.52) * scale, (3.1 - i * 0.25) * scale, 7), toonMat(col, { flat: true }));
+    cone.position.set(rand(-0.18, 0.18) * scale, (2.8 + i * 1.78) * scale, rand(-0.18, 0.18) * scale);
+    cone.rotation.set(rand(-0.06, 0.06), i * 0.7, rand(-0.06, 0.06));
     g.add(cone);
   }
   return g;
 }
 
-/** glowing crystal pylon for the ember zone */
+/** Faceted volcanic obsidian & glowing magma crystal geode cluster */
 function crystal(h, color) {
-  // A volcanic outcrop: dark faceted basalt carries a few thin molten seams.
-  // The restrained emissive faces read as dangerous terrain without competing
-  // with laser, pickup and lock-on colours in the combat corridor.
   const g = new THREE.Group();
-  const base = makeRock(h * 0.28, h * 0.20, 0x211721, 0x4a3030, 6);
-  base.position.y = h * 0.06;
-  base.scale.z = 1.18;
+  const base = makeRock(h * 0.30, h * 0.22, 0x211721, 0x4a3030, 7);
+  base.position.y = h * 0.07;
+  base.scale.z = 1.20;
   g.add(base);
-  const main = new THREE.Mesh(new THREE.ConeGeometry(h * 0.18, h * 0.86, 6), toonMat(0x241923, { emissive: color, emissiveIntensity: 0.70, flat: true }));
-  main.position.y = h * 0.48;
+  // Stepped dark basalt mineral ring collar around crystal root
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(h * 0.22, h * 0.29, h * 0.10, 6), toonMat(0x1b121c, { flat: true }));
+  collar.position.y = h * 0.16;
+  g.add(collar);
+  // Primary hexagonal volcanic crystal prism + sharp bevelled apex
+  const main = new THREE.Mesh(new THREE.CylinderGeometry(h * 0.09, h * 0.18, h * 0.68, 6), toonMat(0x241923, { emissive: color, emissiveIntensity: 0.62, flat: true }));
+  main.position.y = h * 0.44;
   main.rotation.y = rand(TAU);
   g.add(main);
-  for (let i = 0; i < 3; i++) {
-    const shard = new THREE.Mesh(new THREE.ConeGeometry(h * 0.075, h * rand(0.34, 0.58), 5), toonMat(0x21171f, { emissive: color, emissiveIntensity: 0.50, flat: true }));
-    const a = rand(TAU);
-    shard.position.set(Math.cos(a) * h * 0.17, h * 0.22, Math.sin(a) * h * 0.17);
-    shard.rotation.z = rand(-0.40, 0.40); shard.rotation.x = rand(-0.35, 0.35);
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(h * 0.09, h * 0.24, 6), toonMat(0x2a1822, { emissive: color, emissiveIntensity: 0.95, flat: true }));
+  tip.position.y = h * 0.90;
+  tip.rotation.y = main.rotation.y;
+  g.add(tip);
+  // Five radiating secondary crystal splinters at staggered angles
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * TAU + rand(-0.22, 0.22);
+    const shH = h * rand(0.32, 0.60);
+    const shard = new THREE.Mesh(new THREE.ConeGeometry(h * 0.072, shH, 5), toonMat(0x21171f, { emissive: color, emissiveIntensity: 0.56, flat: true }));
+    shard.position.set(Math.cos(a) * h * 0.18, h * 0.20 + shH * 0.22, Math.sin(a) * h * 0.18);
+    shard.rotation.z = -Math.cos(a) * rand(0.28, 0.52);
+    shard.rotation.x = Math.sin(a) * rand(0.28, 0.52);
     g.add(shard);
   }
-  const seam = new THREE.Mesh(new THREE.BoxGeometry(h * 0.07, h * 0.46, h * 0.055), toonMat(0x2c1720, { emissive: color, emissiveIntensity: 0.88, flat: true }));
-  seam.position.set(h * 0.075, h * 0.46, h * 0.14);
+  // Glowing internal magma fissure seam + glowing plasma fracture band
+  const seamMat = toonMat(0x2c1720, { emissive: color, emissiveIntensity: 1.05, flat: true });
+  const seam = new THREE.Mesh(new THREE.BoxGeometry(h * 0.065, h * 0.52, h * 0.055), seamMat);
+  seam.position.set(h * 0.08, h * 0.46, h * 0.13);
   seam.rotation.set(rand(-0.15, 0.15), rand(TAU), rand(-0.18, 0.18));
   g.add(seam);
-  g.userData.glowMat = seam.material;
+  const veinRing = new THREE.Mesh(new THREE.TorusGeometry(h * 0.155, h * 0.018, 5, 10), seamMat);
+  veinRing.rotation.x = Math.PI / 2 + 0.25;
+  veinRing.position.y = h * 0.42;
+  g.add(veinRing);
+  g.userData.glowMat = seamMat;
   return g;
 }
 
-/** Grounded sandstone ruin: fluted shaft, fractured crown and buried footing. */
+/** Grounded ancient desert monolith: stepped carved plinth, fluted sandstone shaft, recessed glyph ring & broken lintel */
 function weatheredRuinPillar(radius, height, base, top, material = cliffMat) {
   const g = new THREE.Group();
-  const footing = makeCliffRock(radius * 1.34, Math.max(7, height * 0.18), base, top, 8, material);
+  const footing = makeCliffRock(radius * 1.38, Math.max(7, height * 0.18), base, top, 8, material);
   footing.position.y = Math.max(1.5, height * 0.075); footing.scale.y = 0.66; g.add(footing);
+  // Carved stepped temple plinth block
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(radius * 2.1, Math.max(2.6, height * 0.08), radius * 2.1), toonMat(base, { flat: true }));
+  plinth.position.y = Math.max(1.8, height * 0.12); g.add(plinth);
   const shaft = makeCliffRock(radius * 0.76, height * 0.80, base, top, 8, material);
-  shaft.position.y = height * 0.43; g.add(shaft);
+  shaft.position.y = height * 0.44; g.add(shaft);
   const collarMat = toonMat(top, { flat: true });
-  for (const y of [height * 0.22, height * 0.54]) {
-    const collar = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.92, radius * 0.98, Math.max(1.4, height * 0.035), 8), collarMat);
+  for (const y of [height * 0.22, height * 0.52, height * 0.76]) {
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.94, radius * 1.02, Math.max(1.5, height * 0.038), 8), collarMat);
     collar.position.y = y; g.add(collar);
   }
-  for (let i = 0; i < 5; i++) {
-    const a = i / 5 * TAU;
-    const flute = new THREE.Mesh(new THREE.BoxGeometry(radius * 0.14, height * 0.42, radius * 0.10), toonMat(base, { flat: true }));
-    flute.position.set(Math.cos(a) * radius * 0.72, height * 0.44, Math.sin(a) * radius * 0.72);
+  // Subtle recessed ancient gold/amber glyph ring band
+  const glyphBand = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.86, Math.max(0.28, radius * 0.05), 5, 12), toonMat(0x2e251a, { emissive: 0xffc66b, emissiveIntensity: 0.72, flat: true }));
+  glyphBand.rotation.x = Math.PI / 2; glyphBand.position.y = height * 0.64; g.add(glyphBand);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * TAU;
+    const flute = new THREE.Mesh(new THREE.BoxGeometry(radius * 0.16, height * 0.56, radius * 0.14), toonMat(base, { flat: true }));
+    flute.position.set(Math.cos(a) * radius * 0.74, height * 0.46, Math.sin(a) * radius * 0.74);
     flute.rotation.y = -a; g.add(flute);
   }
+  // Carved stepped entablature capital cornice
+  const capSlab = new THREE.Mesh(new THREE.BoxGeometry(radius * 2.25, Math.max(2.4, height * 0.07), radius * 2.25), collarMat);
+  capSlab.position.set(0, height * 0.84, 0); capSlab.rotation.z = rand(-0.08, 0.08); g.add(capSlab);
   const crown = makeCliffRock(radius * 1.04, Math.max(5, height * 0.13), top, top, 7, material);
-  crown.position.set(rand(-radius * 0.15, radius * 0.15), height * 0.88, rand(-radius * 0.12, radius * 0.12)); crown.rotation.z = rand(-0.12, 0.12); g.add(crown);
+  crown.position.set(rand(-radius * 0.15, radius * 0.15), height * 0.92, rand(-radius * 0.12, radius * 0.12)); crown.rotation.z = rand(-0.12, 0.12); g.add(crown);
+  // Half-buried fallen broken lintel slab resting beside the base
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(radius * 1.9, radius * 0.48, radius * 0.78), toonMat(top, { flat: true }));
+  lintel.position.set(radius * 1.15, radius * 0.28, radius * 0.45);
+  lintel.rotation.set(0.18, rand(TAU), 0.34); g.add(lintel);
   for (let i = 0; i < 3; i++) {
     const shard = makeCliffRock(radius * rand(0.13, 0.23), height * rand(0.07, 0.14), base, top, 6, material);
-    const a = rand(TAU); shard.position.set(Math.cos(a) * radius * rand(0.82, 1.18), rand(1, height * 0.13), Math.sin(a) * radius * rand(0.82, 1.12)); g.add(shard);
+    const a = rand(TAU); shard.position.set(Math.cos(a) * radius * rand(0.84, 1.22), rand(1, height * 0.13), Math.sin(a) * radius * rand(0.84, 1.15)); g.add(shard);
   }
   return g;
 }
 
-/** A cratered meteor impact: layered rim, embedded iron core and short heat beacon. */
+/** Sculpted half-buried crashed spacecraft hull & armored rib wreckage for the Dune Sea */
+function desertWreckage(scale = 1) {
+  const g = new THREE.Group();
+  const hullMat = toonMat(0x7c7163, { map: terrainArmorTex, flat: true });
+  const darkMat = toonMat(0x302b28, { flat: true });
+  const wingMat = toonMat(0x9b8668, { map: terrainArmorTex, flat: true });
+  // Slanted broken fuselage spine embedded in the sand
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(11 * scale, 2.8 * scale, 4.6 * scale), hullMat);
+  hull.position.set(0, 1.4 * scale, 0); hull.rotation.z = 0.28; g.add(hull);
+  // 4 exposed structural bulkhead ribs jutting from the torn frame
+  for (let i = 0; i < 4; i++) {
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.48 * scale, 3.6 * scale, 5.2 * scale), darkMat);
+    rib.position.set((-3.6 + i * 2.4) * scale, 1.9 * scale, 0);
+    rib.rotation.z = 0.28 + rand(-0.08, 0.08); g.add(rib);
+  }
+  // Angled sheared delta wing fin jutting skyward
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(6.8 * scale, 0.45 * scale, 3.2 * scale), wingMat);
+  wing.position.set(2.4 * scale, 3.4 * scale, -1.8 * scale);
+  wing.rotation.set(0.45, -0.32, 0.72); g.add(wing);
+  // Broken circular thruster nozzle ring + faint amber distress transponder
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(1.35 * scale, 1.65 * scale, 2.2 * scale, 8), darkMat);
+  nozzle.rotation.z = Math.PI / 2 + 0.28;
+  nozzle.position.set(-5.8 * scale, 0.9 * scale, 0); g.add(nozzle);
+  const spark = new THREE.Mesh(new THREE.OctahedronGeometry(0.55 * scale, 0), toonMat(0x281810, { emissive: 0xffa842, emissiveIntensity: 1.5, flat: true }));
+  spark.position.set(1.2 * scale, 3.2 * scale, 0.6 * scale); g.add(spark);
+  g.userData.glowMat = spark.material;
+  return g;
+}
+
+/** Sculpted meteor impact crater: jagged ejecta ridge boulders, molten slag pool, embedded obsidian core & glowing shock rays */
 function meteorImpactSite(radius, base, top, accent, material = cliffMat) {
   const g = new THREE.Group();
-  const rim = makeCliffRock(radius * 1.42, radius * 0.48, base, top, 8, material);
+  const rim = makeCliffRock(radius * 1.44, radius * 0.48, base, top, 9, material);
   rim.position.y = Math.max(0.8, radius * 0.07); rim.scale.y = 0.45; g.add(rim);
-  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.82, radius * 1.02, Math.max(1.5, radius * 0.14), 10), toonMat(0x271e22, { flat: true }));
-  bowl.position.y = Math.max(0.6, radius * 0.12); g.add(bowl);
-  const meteor = makeCliffRock(radius * 0.56, radius * 1.35, 0x3b3436, 0x75604b, 7, material);
-  meteor.position.set(radius * 0.10, radius * 0.45, -radius * 0.08); meteor.rotation.set(rand(-0.34, 0.34), rand(TAU), rand(-0.30, 0.30)); g.add(meteor);
-  const seamMat = toonMat(0x25151c, { emissive: accent, emissiveIntensity: 1.05, flat: true });
-  for (let i = 0; i < 3; i++) {
-    const a = i / 3 * TAU + 0.25;
-    const seam = new THREE.Mesh(new THREE.BoxGeometry(radius * 0.92, 0.52, 0.62), seamMat);
-    seam.position.set(Math.cos(a) * radius * 0.55, radius * 0.30, Math.sin(a) * radius * 0.55); seam.rotation.y = -a; g.add(seam);
+  // Segmented raised crater rim ejecta teeth around perimeter
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * TAU + rand(-0.2, 0.2);
+    const chunk = makeCliffRock(radius * rand(0.24, 0.36), radius * rand(0.26, 0.44), base, top, 6, material);
+    chunk.position.set(Math.cos(a) * radius * 1.18, radius * 0.16, Math.sin(a) * radius * 1.18);
+    chunk.rotation.z = -Math.cos(a) * 0.36; chunk.rotation.x = Math.sin(a) * 0.36;
+    g.add(chunk);
   }
-  const beacon = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTexture(), color: accent, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false, fog: true }));
-  beacon.position.set(0, radius * 1.15, 0); beacon.scale.set(radius * 0.95, radius * 1.45, 1); g.add(beacon);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.86, radius * 1.04, Math.max(1.5, radius * 0.14), 10), toonMat(0x271e22, { flat: true }));
+  bowl.position.y = Math.max(0.6, radius * 0.12); g.add(bowl);
+  // Glowing molten slag pool floor inside crater
+  const seamMat = toonMat(0x25151c, { emissive: accent, emissiveIntensity: 1.15, flat: true });
+  const slag = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.68, 12), seamMat);
+  slag.rotation.x = -Math.PI / 2; slag.position.y = Math.max(0.95, radius * 0.20); g.add(slag);
+  const meteor = makeCliffRock(radius * 0.58, radius * 1.42, 0x3b3436, 0x75604b, 7, material);
+  meteor.position.set(radius * 0.10, radius * 0.48, -radius * 0.08); meteor.rotation.set(rand(-0.34, 0.34), rand(TAU), rand(-0.30, 0.30)); g.add(meteor);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * TAU + 0.25;
+    const seam = new THREE.Mesh(new THREE.BoxGeometry(radius * 1.05, 0.56, 0.66), seamMat);
+    seam.position.set(Math.cos(a) * radius * 0.58, radius * 0.30, Math.sin(a) * radius * 0.58); seam.rotation.y = -a; g.add(seam);
+  }
+  const beacon = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTexture(), color: accent, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, fog: true }));
+  beacon.position.set(0, radius * 1.18, 0); beacon.scale.set(radius * 1.0, radius * 1.5, 1); g.add(beacon);
   g.userData.impactGlow = seamMat;
   g.userData.impactBeacon = beacon;
   return g;
 }
 
-/* ---------------- waterfall material (scrolling stripes) -- */
+/* ---------------- waterfall material (cached texture so chunk recycles never leak) -- */
+let _waterfallTex = null;
 function waterfallTexture() {
+  if (_waterfallTex) return _waterfallTex;
   const c = document.createElement('canvas');
   c.width = 128; c.height = 256;
   const g = c.getContext('2d');
-  g.fillStyle = '#2a5cd0'; g.fillRect(0, 0, 128, 256);
-  for (let i = 0; i < 30; i++) {
-    const x = rand(0, 128), w = rand(3, 12);
-    g.fillStyle = pick(['#3f74e0', '#5b90ec', '#dceaff', '#a9c8f5']);
-    g.globalAlpha = rand(0.35, 0.9);
-    const y = rand(0, 256), h = rand(30, 120);
+  const grad = g.createLinearGradient(0, 0, 128, 0);
+  grad.addColorStop(0, '#4ca2f0');
+  grad.addColorStop(0.5, '#1b64d4');
+  grad.addColorStop(1, '#4ca2f0');
+  g.fillStyle = grad; g.fillRect(0, 0, 128, 256);
+  for (let i = 0; i < 42; i++) {
+    const x = rand(0, 128), w = rand(3, 13);
+    g.fillStyle = pick(['#4da0f5', '#82ccff', '#e8f9ff', '#ffffff']);
+    g.globalAlpha = rand(0.45, 0.96);
+    const y = rand(0, 256), h = rand(36, 130);
     g.fillRect(x, y, w, h);
     if (y + h > 256) g.fillRect(x, 0, w, y + h - 256);
   }
@@ -663,6 +837,7 @@ function waterfallTexture() {
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
+  _waterfallTex = tex;
   return tex;
 }
 
@@ -678,6 +853,7 @@ export class Terrain {
     this.chunks = [];
     this.waterfallMats = [];
     this.glows = [];           // pulsing emissive decorations
+    this.rotors = [];          // chunk-owned rotating radar dishes & beacon rings
     this.naturalEffects = [];  // chunk-owned visual phenomena; transform-only update
     this.time = 0;
     // Decorative transforms can run below gameplay rate. Chunk movement and
@@ -685,6 +861,7 @@ export class Terrain {
     this._ambientAccumulator = 0;
     this._ambientInterval = 1 / 30;
     this._drawDistance = 1500;
+    this._waterCpuEnabled = true;
     this.stage = 1;
     this.stageVariant = 0;
     this._nextVirtual = 0;
@@ -843,12 +1020,14 @@ export class Terrain {
     mark.scale.setScalar(base);
     mark.material.color.setHex(p.color);
     mark.material.opacity = p.opacity;
-    mark.userData = { life: p.life * (big ? 1.1 : 0.8), maxLife: p.life * (big ? 1.1 : 0.8), base, kind: id, op: p.opacity };
+    mark.userData = {
+      life: p.life * (big ? 1.1 : 0.8),
+      maxLife: p.life * (big ? 1.1 : 0.8),
+      base, kind: id, op: p.opacity, emberPulse: id === 'ember', pulseOff: rand(TAU),
+    };
 
     if (id === 'sea') {
       this.sparkles.visible = true;
-    } else if (id === 'ember') {
-      this.glows.push({ chunk: null, mat: mark.material, base: p.opacity, amp: p.opacity * 0.25, off: rand(TAU), impact: true });
     }
     return mark;
   }
@@ -862,33 +1041,34 @@ export class Terrain {
     this.water.visible = vis;
     this.glint.visible = vis && this.zone.id === 'sea';
     if (!vis) return;
-    // Animated water is a background surface. Updating it at 20 Hz remains
-    // smooth at flight speed, while direct typed-array writes avoid accessor
-    // overhead. Flat shading means normal recomputation can be infrequent.
-    this._waterFrame = (this._waterFrame + 1) % 3;
-    if (this._waterFrame === 0) {
-      const posAttr = this.water.geometry.attributes.position;
-      const colAttr = this.water.geometry.attributes.color;
-      const pos = posAttr.array, col = colAttr.array;
-      const t = this.time;
-      const cd = this._waterDeep, cs = this._waterShallow;
-      const dr = cs.r - cd.r, dg = cs.g - cd.g, db = cs.b - cd.b;
-      const zOffset = this.water.position.z;
-      for (let i = 0, j = 0; i < pos.length; i += 3, j += 3) {
-        const x = pos[i], z = pos[i + 2] - zOffset;
-        const h = Math.sin(x * 0.045 + t * 1.4) * 0.7 + Math.sin(z * 0.05 + t * 0.9 + x * 0.02) * 0.8
-          + Math.sin((x + z) * 0.021 + t * 0.6) * 0.5;
-        pos[i + 1] = h;
-        const k = clamp(h * 0.38 + 0.5, 0, 1);
-        col[j] = cd.r + dr * k; col[j + 1] = cd.g + dg * k; col[j + 2] = cd.b + db * k;
+    // Animated water is a background surface. In lightweight modes we skip the
+    // 1,881-vertex CPU wave loop and let the GPU shader animate ripples at zero CPU cost.
+    if (this._waterCpuEnabled) {
+      this._waterFrame = (this._waterFrame + 1) % 3;
+      if (this._waterFrame === 0) {
+        const posAttr = this.water.geometry.attributes.position;
+        const colAttr = this.water.geometry.attributes.color;
+        const pos = posAttr.array, col = colAttr.array;
+        const t = this.time;
+        const cd = this._waterDeep, cs = this._waterShallow;
+        const dr = cs.r - cd.r, dg = cs.g - cd.g, db = cs.b - cd.b;
+        const zOffset = this.water.position.z;
+        for (let i = 0, j = 0; i < pos.length; i += 3, j += 3) {
+          const x = pos[i], z = pos[i + 2] - zOffset;
+          const h = Math.sin(x * 0.045 + t * 1.4) * 0.7 + Math.sin(z * 0.05 + t * 0.9 + x * 0.02) * 0.8
+            + Math.sin((x + z) * 0.021 + t * 0.6) * 0.5;
+          pos[i + 1] = h;
+          const k = clamp(h * 0.38 + 0.5, 0, 1);
+          col[j] = cd.r + dr * k; col[j + 1] = cd.g + dg * k; col[j + 2] = cd.b + db * k;
+        }
+        posAttr.needsUpdate = true;
+        colAttr.needsUpdate = true;
+        this._waterNormalFrame = (this._waterNormalFrame + 1) % 6;
+        if (this._waterNormalFrame === 0) this.water.geometry.computeVertexNormals();
       }
-      posAttr.needsUpdate = true;
-      colAttr.needsUpdate = true;
-      this._waterNormalFrame = (this._waterNormalFrame + 1) % 6;
-      if (this._waterNormalFrame === 0) this.water.geometry.computeVertexNormals();
     }
-    // The sun trail is a horizon cue, not a white runway across the combat lane.
-    this.glint.material.opacity = this.zone.id === 'sea' ? 0.085 + Math.sin(this.time * 2.2) * 0.018 : 0;
+    // Luminous golden sunset reflection path on Azure Sea water (STAR_FOX_4.jpeg)
+    this.glint.material.opacity = this.zone.id === 'sea' ? 0.28 + Math.sin(this.time * 2.2) * 0.04 : 0;
 
     // twinkle + scroll the sparkles, only in the sea zone
     const showSpark = this.zone.id === 'sea';
@@ -905,7 +1085,7 @@ export class Terrain {
       }
       this.sparkles.geometry.attributes.position.needsUpdate = true;
       this.sparkles.geometry.attributes.aA.needsUpdate = true;
-      this._sparkleMat.uniforms.uColor.value.copy(this._waterShallow).lerp(new THREE.Color(0xffedbe), 0.48);
+      this._sparkleMat.uniforms.uColor.value.copy(this._waterShallow).lerp(_sparkTint, 0.48);
     }
   }
 
@@ -954,7 +1134,12 @@ export class Terrain {
 
   /** Decorative scenery can update below gameplay rate without changing routes or collisions. */
   setAmbientRate(hz = 30) {
-    this._ambientInterval = 1 / clamp(hz, 15, 60);
+    this._ambientInterval = 1 / clamp(hz, 10, 60);
+  }
+
+  /** Toggle CPU vertex-wave mutation (FAST/LITE modes rely purely on the GPU water shader). */
+  setWaterCpuEnabled(enabled) {
+    this._waterCpuEnabled = !!enabled;
   }
 
   /** Hide far terrain past fog-relevant range while retaining full-rate chunk recycling. */
@@ -969,8 +1154,9 @@ export class Terrain {
    * pass per chunk (_autoCollideChunk) after population. `_obstacle` just flags
    * an explicit damage value; the geometry-fit happens in the pass.
    */
-  _obstacle(chunk, mesh, _r, damage = 18) {
+  _obstacle(chunk, mesh, _r, damage = 18, isStructure = false) {
     mesh.userData.dmg = damage;
+    if (isStructure) mesh.userData.isStructure = true;
     chunk.add(mesh);
     return mesh;
   }
@@ -991,20 +1177,23 @@ export class Terrain {
         rh: Math.max(_bs.x, _bs.z) * 0.5,              // horizontal radius
         hy: _bs.y * 0.5,                               // vertical half-height
         damage: o.userData.dmg ?? 14,
+        isStructure: !!o.userData.isStructure,
       };
       obs.push(o);
     }
   }
 
-  /** register one extra collider (chunk-local cz) — used for ring/arch rims that
-   *  a single bbox cylinder can't describe without plugging their opening */
-  _addCollider(chunk, cx, cy, czLocal, rh, hy, damage = 14) {
-    chunk.userData.obstacles.push({ userData: { collide: { cx, cy, cz: czLocal, rh, hy, damage } } });
+  /** register one extra collider (chunk-local cz) — used for ring/arch rims and
+   *  engineered structures whose silhouettes need tight multi-volume hitboxes */
+  _addCollider(chunk, cx, cy, czLocal, rh, hy, damage = 14, isStructure = false) {
+    chunk.userData.obstacles.push({
+      userData: { collide: { cx, cy, cz: czLocal, rh, hy, damage, isStructure: !!isStructure } },
+    });
   }
 
   /** trace a torus arc (rim of a ring / span of an arch) with a chain of small
    *  overlapping colliders, leaving the central opening passable */
-  _torusColliders(chunk, cx0, cy0, czLocal, R, tube, a0, a1, rotZ, damage) {
+  _torusColliders(chunk, cx0, cy0, czLocal, R, tube, a0, a1, rotZ, damage, isStructure = false) {
     const rh = Math.max(tube + 3, 8);
     const arcLen = R * Math.abs(a1 - a0);
     const samples = clamp(Math.round(arcLen / (rh * 1.05)), 6, 24);
@@ -1012,11 +1201,11 @@ export class Terrain {
     for (let i = 0; i <= samples; i++) {
       const a = a0 + (a1 - a0) * (i / samples);
       const dx = R * Math.cos(a), dy = R * Math.sin(a);
-      this._addCollider(chunk, cx0 + dx * cosR - dy * sinR, cy0 + dx * sinR + dy * cosR, czLocal, rh, rh, damage);
+      this._addCollider(chunk, cx0 + dx * cosR - dy * sinR, cy0 + dx * sinR + dy * cosR, czLocal, rh, rh, damage, isStructure);
     }
   }
 
-  /** call the callback with world-space cylinder-collider info near the play plane */
+  /** call the callback with world-space cylinder-collider info across the combat & ally lookahead corridor */
   forEachObstacle(cb) {
     for (const chunk of this.chunks) {
       const cz = chunk.position.z;
@@ -1024,7 +1213,7 @@ export class Terrain {
       for (let i = 0; i < obs.length; i++) {
         const c = obs[i].userData.collide;
         const wz = c.cz + cz;
-        if (wz > -90 - c.rh && wz < 50 + c.rh) cb(c.cx, c.cy, wz, c.rh, c.hy, c.damage, obs[i]);
+        if (wz > -175 - c.rh && wz < 55 + c.rh) cb(c.cx, c.cy, wz, c.rh, c.hy, c.damage, obs[i], !!c.isStructure);
       }
     }
   }
@@ -1034,11 +1223,20 @@ export class Terrain {
     for (let i = chunk.children.length - 1; i >= 0; i--) {
       const o = chunk.children[i];
       chunk.remove(o);
-      o.traverse?.((n) => { if (n.geometry && !n.userData.shared) n.geometry.dispose?.(); });
+      o.traverse?.((n) => {
+        if (n.geometry && !n.userData.shared && !n.geometry.userData?.shared) n.geometry.dispose?.();
+        if (n.material) {
+          const mats = Array.isArray(n.material) ? n.material : [n.material];
+          for (const m of mats) {
+            if (m && !m.userData?.shared) m.dispose?.();
+          }
+        }
+      });
     }
     chunk.userData.obstacles.length = 0;
-    // drop this chunk's glow + waterfall refs so they don't leak on recycle
+    // drop this chunk's glow + waterfall + rotor refs so they don't leak on recycle
     this.glows = this.glows.filter((gr) => gr.chunk !== chunk);
+    this.rotors = this.rotors.filter((r) => r.chunk !== chunk);
     this.waterfallMats = this.waterfallMats.filter((w) => w.chunk !== chunk);
     for (const fx of this.naturalEffects) if (fx.chunk === chunk) fx.mat?.dispose?.();
     this.naturalEffects = this.naturalEffects.filter((fx) => fx.chunk !== chunk);
@@ -1055,23 +1253,24 @@ export class Terrain {
       case 'dune': this._popDune(chunk, z); break;
     }
     this._routeMarkers(chunk, z);
-    this._stageSetpiece(chunk, z);
+    const chunkOrd = Math.abs(Math.round(chunk.userData.virtualZ / CHUNK_LEN));
+    const hasSetpiece = (chunkOrd % 5) === this.stageVariant;
+    if (hasSetpiece) this._stageSetpiece(chunk, z);
+    else if (chunkOrd % 4 === 1) this._complexProp(chunk, z);
     this._zonePhenomena(chunk, z);
     this._autoCollideChunk(chunk);
   }
 
-  /** place obstacles across the width but always leave a navigable gap */
+  /** place obstacles across the width while always keeping a wide, clear central flight corridor */
   _obstacleRow(chunk, zz, count, place) {
     const route = flightRoute(this.zone?.id, chunk.userData.virtualZ + zz);
     const gapCenter = route.center;
-    // Preserve a full ship-width of visual and collision clearance beyond the
-    // beacon channel. Individual props may be wide, so centre-only placement is
-    // not sufficient to guarantee a fair weaving line.
-    const gapHalf = route.halfWidth + 54;
+    // Wide navigable flight corridor beyond the beacon channel so combat stays exhilarating and fair.
+    const gapHalf = route.halfWidth + 74;
     let made = 0, tries = 0;
     while (made < count && tries < count * 4) {
       tries++;
-      const x = rand(-FIELD * 0.86, FIELD * 0.86);
+      const x = rand(-FIELD * 0.90, FIELD * 0.90);
       if (Math.abs(x - gapCenter) < gapHalf) continue;
       place(x, zz + rand(-30, 30));
       made++;
@@ -1102,11 +1301,11 @@ export class Terrain {
       dune:  { body: 0x756144, trim: 0xcbb982, lamp: 0xffd77a, height: 13 },
     };
     const s = styles[z.id] ?? styles.dune;
-    for (const localZ of [-42, -178]) {
+    for (const localZ of [-125]) {
       const route = flightRoute(z.id, chunk.userData.virtualZ + localZ);
       for (const side of [-1, 1]) {
         const g = new THREE.Group();
-        const x = route.center + side * (route.halfWidth + 24);
+        const x = route.center + side * (route.halfWidth + 46);
         if (z.id === 'sea') {
           // Anchored navigation buoy: a low pontoon and twin braces make it part
           // of the water surface rather than a generic pole on the horizon.
@@ -1146,204 +1345,337 @@ export class Terrain {
           const fin = new THREE.Mesh(new THREE.BoxGeometry(0.35, 4.2, 5.2), toonMat(s.body, { flat: true }));
           fin.position.y = s.height * 0.74 + 1.2; g.add(fin);
         }
-        const collar = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.65, 6), toonMat(s.trim, { flat: true }));
+        const collar = new THREE.Mesh(new THREE.CylinderGeometry(1.75, 1.95, 0.72, 8), toonMat(s.trim, { map: terrainArmorTex, flat: true }));
         collar.position.y = s.height * 0.68 + 1; g.add(collar);
-        const lamp = new THREE.Mesh(new THREE.SphereGeometry(1.25, 8, 6), toonMat(0x181c24, { emissive: s.lamp, emissiveIntensity: 1.4, flat: true }));
-        lamp.position.y = s.height + 1.7; g.add(lamp);
-        // A physical signal cage makes the marker legible as world infrastructure,
-        // not a floating UI dot. It has no collider and preserves the clear route.
-        const signalCage = new THREE.Mesh(new THREE.TorusGeometry(1.62, 0.12, 5, 10), toonMat(s.trim, { emissive: s.lamp, emissiveIntensity: 0.18, flat: true }));
-        signalCage.rotation.x = Math.PI / 2; signalCage.position.y = s.height + 1.7; g.add(signalCage);
+        // Sculpted armoured base ring, twin diagonal gussets, stabilizer winglets & directional channel chevrons
+        const baseRing = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 4.5, 1.45, 8), toonMat(s.body, { map: terrainArmorTex, flat: true }));
+        baseRing.position.y = 0.9; g.add(baseRing);
+        const bumperRing = new THREE.Mesh(new THREE.TorusGeometry(4.45, 0.22, 5, 14), toonMat(0x202730, { emissive: s.lamp, emissiveIntensity: 0.35, flat: true }));
+        bumperRing.rotation.x = Math.PI / 2; bumperRing.position.y = 1.25; g.add(bumperRing);
+        for (const ribSide of [-1, 1]) {
+          const gusset = new THREE.Mesh(new THREE.BoxGeometry(0.45, s.height * 0.44, 2.3), toonMat(s.trim, { flat: true }));
+          gusset.position.set(ribSide * 1.58, s.height * 0.25 + 1.0, 0);
+          gusset.rotation.z = ribSide * 0.26;
+          g.add(gusset);
+        }
+        // Double stacked directional holographic chevron fins pointing into the safe corridor
+        for (const dy of [0, 1.15]) {
+          const chevron = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.34, 0.54), toonMat(0x181c24, { emissive: s.lamp, emissiveIntensity: 1.25, flat: true }));
+          chevron.position.set(-side * 1.95, s.height * 0.78 + 1.0 + dy, 0.6);
+          chevron.rotation.z = side * 0.45;
+          g.add(chevron);
+        }
+        const lamp = new THREE.Mesh(new THREE.OctahedronGeometry(1.3, 0), toonMat(0x181c24, { emissive: s.lamp, emissiveIntensity: 1.5, flat: true }));
+        lamp.position.y = s.height + 1.85; g.add(lamp);
+        // Animated dual orthogonal gyroscopic signal rings atop each navigation pylon
+        const cageRotor = new THREE.Group();
+        cageRotor.position.y = s.height + 1.85;
+        const signalCage = new THREE.Mesh(new THREE.TorusGeometry(1.92, 0.14, 5, 14), toonMat(s.trim, { emissive: s.lamp, emissiveIntensity: 0.35, flat: true }));
+        signalCage.rotation.x = Math.PI / 2; cageRotor.add(signalCage);
+        const vertCage = new THREE.Mesh(new THREE.TorusGeometry(1.56, 0.10, 5, 12), toonMat(s.body, { flat: true }));
+        cageRotor.add(vertCage);
+        g.add(cageRotor);
+        this.rotors.push({ chunk, obj: cageRotor, speed: 1.1 * side });
+        const finial = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.24, 3.4, 5), toonMat(s.trim, { flat: true }));
+        finial.position.y = s.height + 3.8; g.add(finial);
         g.position.set(x, 0, localZ);
-        g.userData.noCollide = true;
+        g.userData.noCollide = true; // tight pylon collider added explicitly below so the channel stays fair
         chunk.add(g);
-        this.glows.push({ chunk, mat: lamp.material, base: 1.4, amp: 0.42, off: route.center * 0.03 + side });
+        this._addCollider(chunk, x, s.height * 0.56 + 0.6, localZ, 2.8, s.height * 0.58 + 1.0, 12, true);
+        this.glows.push({ chunk, mat: lamp.material, base: 1.5, amp: 0.48, off: route.center * 0.03 + side });
       }
     }
   }
 
-  /** One readable, grounded landmark per three recycled chunks. */
+  /** One intricate, solid-collidable engineered landmark spaced generously outside the flight corridor. */
   _stageSetpiece(chunk, z) {
-    const ordinal = Math.abs(Math.round(chunk.userData.virtualZ / CHUNK_LEN)) % 3;
-    if (ordinal !== this.stageVariant) return;
     const route = flightRoute(z.id, chunk.userData.virtualZ - CHUNK_LEN * 0.52);
     const side = ((Math.abs(Math.floor(chunk.userData.virtualZ / CHUNK_LEN)) + this.stage) % 2) ? 1 : -1;
-    const x = route.center + side * (route.halfWidth + rand(156, 220));
+    const x = route.center + side * (route.halfWidth + rand(178, 245));
     const localZ = -CHUNK_LEN * rand(0.32, 0.72);
+    const rotY = side * rand(-0.24, 0.24);
+    const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
     const g = new THREE.Group();
     g.position.set(x, 0, localZ);
-    g.rotation.y = side * rand(-0.28, 0.28);
-    g.userData.noCollide = true;
+    g.rotation.y = rotY;
+    g.userData.noCollide = true; // tight per-volume structural colliders registered via addSolid() below
 
-    // Stage landmarks use a tiny paint-colour emission floor and double-sided
-    // toon shading. This preserves panel facets in fog and on mobile GPU drivers
-    // where a single unlit back face otherwise collapses into a black silhouette.
-    const metal = (c, glow = 0x000000, intensity = 0) => {
+    const addSolid = (lx, ly, lz, rh, hy, dmg = 18) => {
+      const wx = x + lx * cosY + lz * sinY;
+      const wz = localZ - lx * sinY + lz * cosY;
+      this._addCollider(chunk, wx, ly, wz, rh, hy, dmg, true);
+    };
+
+    // Stage landmarks use panel-plated / window-grid toon materials with a subtle
+    // self-lit floor so architectural facets stay crisp through fog.
+    const metal = (c, glow = 0x000000, intensity = 0, opts = {}) => {
       const selfLit = glow === 0x000000;
-      return toonMat(c, {
+      const mat = toonMat(c, {
         emissive: selfLit ? c : glow,
-        emissiveIntensity: selfLit ? 0.11 : intensity,
+        emissiveIntensity: selfLit ? 0.13 : intensity,
+        map: opts.windows ? terrainWindowTex : opts.plain ? undefined : terrainArmorTex,
         flat: true,
         side: THREE.DoubleSide,
       });
+      if (opts.windows) mat.emissiveMap = terrainWindowTex;
+      return mat;
     };
     const lamp = (px, py, pz, color, scale = 1) => {
-      const node = new THREE.Mesh(new THREE.OctahedronGeometry(2.0 * scale, 0), metal(0x151821, color, 1.8));
+      const node = new THREE.Mesh(new THREE.OctahedronGeometry(2.0 * scale, 0), metal(0x151821, color, 1.85));
       node.position.set(px, py, pz); g.add(node);
-      this.glows.push({ chunk, mat: node.material, base: 1.8, amp: 0.62, off: rand(TAU) });
+      this.glows.push({ chunk, mat: node.material, base: 1.85, amp: 0.62, off: rand(TAU) });
     };
 
     if (z.id === 'sea') {
-      // A real wave-side relay: submerged foot, deck, antennas and a weather vane.
+      // Fortified offshore naval relay: wave-breaker reef, armoured deck, bridge pod, dishes & crane booms.
       const reef = seaStack(28, 46, z.rock.base, z.rock.top);
       reef.position.y = -2; g.add(reef);
-      const deck = new THREE.Mesh(new THREE.CylinderGeometry(23, 27, 4, 10), metal(0x29465b));
+      const deck = new THREE.Mesh(new THREE.CylinderGeometry(23, 27, 4.2, 10), metal(0x29465b));
       deck.position.y = 20; g.add(deck);
-      const tower = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 5.4, 48, 8), metal(0x21394c));
-      tower.position.y = 45; g.add(tower);
+      const deckRim = new THREE.Mesh(new THREE.TorusGeometry(23.5, 0.55, 6, 16), metal(0x1b2f3f, 0x7be8ff, 0.55));
+      deckRim.rotation.x = Math.PI / 2; deckRim.position.y = 22.1; g.add(deckRim);
+      // 6 perimeter armour buttresses & landing pad circle on sea deck
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * TAU;
+        const strut = new THREE.Mesh(new THREE.BoxGeometry(2.4, 16, 3.6), metal(0x1f3649));
+        strut.position.set(Math.cos(a) * 23, 13, Math.sin(a) * 23);
+        strut.rotation.y = -a;
+        g.add(strut);
+      }
+      // Illuminated command bridge superstructure wrapped around the tower base
+      const bridge = new THREE.Mesh(new THREE.CylinderGeometry(9.6, 11.2, 8.5, 8), metal(0x2d4e66, 0x7ef0ff, 0.58, { windows: true }));
+      bridge.position.y = 26.2; g.add(bridge);
+      const visor = new THREE.Mesh(new THREE.CylinderGeometry(10.1, 10.1, 1.6, 8), metal(0x122634, 0x7ef0ff, 1.4, { plain: true }));
+      visor.position.y = 27.6; g.add(visor);
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 5.6, 48, 8), metal(0x21394c));
+      tower.position.y = 47; g.add(tower);
+      for (let r = 0; r < 4; r++) {
+        const a = (r / 4) * TAU;
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(1.1, 44, 1.6), metal(0x3a6178));
+        rib.position.set(Math.cos(a) * 4.5, 47, Math.sin(a) * 4.5); rib.rotation.y = -a; g.add(rib);
+      }
       for (let i = 0; i < 3; i++) {
-        const dish = new THREE.Mesh(new THREE.ConeGeometry(9 - i, 2.8, 12, 1, true), metal(0x547d95, 0x6bdcff, 0.35));
-        dish.position.set(side * (4 + i * 3), 39 + i * 9, 0); dish.rotation.z = side * 0.78; g.add(dish);
+        const dish = new THREE.Mesh(new THREE.ConeGeometry(9.5 - i, 3.0, 12, 1, true), metal(0x547d95, 0x6bdcff, 0.40));
+        dish.position.set(side * (4.5 + i * 3), 40 + i * 9.5, 0); dish.rotation.z = side * 0.78; g.add(dish);
       }
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.1, 34, 6), metal(0x1c3042));
-      mast.position.y = 84; g.add(mast);
-      // Mooring booms and tension cables connect the tall relay to the reef deck,
-      // so the sea landmark reads as an engineered outpost rather than a floating mast.
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.25, 36, 6), metal(0x1c3042));
+      mast.position.y = 85; g.add(mast);
       for (const boomSide of [-1, 1]) {
-        const boom = new THREE.Mesh(new THREE.BoxGeometry(20, 1.1, 1.4), metal(0x31566a));
-        boom.position.set(boomSide * 13, 34, 4); boom.rotation.z = boomSide * 0.26; g.add(boom);
-        const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 58, 5), metal(0x9ecfe2));
-        cable.position.set(boomSide * 11, 57, 3); cable.rotation.z = boomSide * 0.28; g.add(cable);
-        lamp(boomSide * 23, 39, 4, 0x7be8ff, 0.46);
+        const boom = new THREE.Mesh(new THREE.BoxGeometry(22, 1.25, 1.6), metal(0x31566a));
+        boom.position.set(boomSide * 13.5, 35, 4); boom.rotation.z = boomSide * 0.26; g.add(boom);
+        const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 58, 5), metal(0x9ecfe2));
+        cable.position.set(boomSide * 11, 58, 3); cable.rotation.z = boomSide * 0.28; g.add(cable);
+        lamp(boomSide * 24, 40, 4, 0x7be8ff, 0.50);
       }
-      // Service cages and offset maintenance pods give the relay a readable working scale.
       for (const serviceSide of [-1, 1]) {
-        const pod = new THREE.Mesh(new THREE.BoxGeometry(7.2, 3.8, 5.4), metal(0x27475d));
-        pod.position.set(serviceSide * 16, 24, -7); pod.rotation.z = serviceSide * 0.08; g.add(pod);
-        const porthole = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 0.22, 8), metal(0x172734, 0x62d8ff, 0.75));
-        porthole.rotation.x = Math.PI / 2; porthole.position.set(serviceSide * 16, 24.5, -9.8); g.add(porthole);
+        const pod = new THREE.Mesh(new THREE.BoxGeometry(7.8, 4.2, 5.8), metal(0x27475d));
+        pod.position.set(serviceSide * 16, 24.4, -7); pod.rotation.z = serviceSide * 0.08; g.add(pod);
+        const porthole = new THREE.Mesh(new THREE.BoxGeometry(4.6, 1.0, 0.25), metal(0x172734, 0x7ef0ff, 1.2));
+        porthole.position.set(serviceSide * 16, 25.0, -9.95); g.add(porthole);
       }
       for (const py of [56, 72, 88]) {
-        const cage = new THREE.Mesh(new THREE.TorusGeometry(1.65, 0.15, 5, 12), metal(0x476c80, 0x62d8ff, 0.18));
+        const cage = new THREE.Mesh(new THREE.TorusGeometry(2.1, 0.18, 5, 12), metal(0x476c80, 0x62d8ff, 0.28));
         cage.rotation.x = Math.PI / 2; cage.position.set(0, py, 0); g.add(cage);
       }
-      lamp(0, 104, 0, 0x8eeaff, 1.35);
+      lamp(0, 105, 0, 0x8eeaff, 1.4);
+      // Solid multi-tier colliders matching the reef deck, bridge keep, tower core & mast
+      addSolid(0, 11, 0, 26, 12.5, 18);
+      addSolid(0, 27, 0, 11.5, 6.5, 18);
+      addSolid(0, 50, 0, 6.5, 22, 18);
+      addSolid(0, 86, 0, 2.8, 18, 16);
     } else if (z.id === 'gorge') {
-      // A cliff-side suspension observatory: buttresses, span and cascading mist.
+      // Engineered canyon suspension observatory: buttressed twin pylons, glazed sky-bridge & radome.
       const footing = makeRock(34, 68, z.rock.base, z.rock.top, 7);
       footing.position.y = 20; g.add(footing);
       for (const offset of [-16, 16]) {
-        const pylon = new THREE.Mesh(new THREE.BoxGeometry(7, 72, 8), metal(0x5d5548));
+        const pylon = new THREE.Mesh(new THREE.BoxGeometry(7.6, 74, 8.6), metal(0x5d5548));
         pylon.position.set(offset, 52, 0); g.add(pylon);
-        const cap = new THREE.Mesh(new THREE.ConeGeometry(6, 12, 6), metal(0x3c4650));
-        cap.position.set(offset, 94, 0); g.add(cap);
-        lamp(offset, 88, 0, 0xa8efff, 0.75);
+        // Steel corner ribs & illuminated vertical lift strip on each pylon
+        for (const rx of [-3.6, 3.6]) {
+          const rib = new THREE.Mesh(new THREE.BoxGeometry(1.1, 74, 9.2), metal(0x363e47));
+          rib.position.set(offset + rx, 52, 0); g.add(rib);
+        }
+        const shaft = new THREE.Mesh(new THREE.BoxGeometry(1.2, 56, 0.4), metal(0x162430, 0xa8efff, 1.25));
+        shaft.position.set(offset, 50, 4.4); g.add(shaft);
+        const cap = new THREE.Mesh(new THREE.ConeGeometry(6.4, 13, 6), metal(0x3c4650));
+        cap.position.set(offset, 95, 0); g.add(cap);
+        lamp(offset, 89, 0, 0xa8efff, 0.78);
       }
-      const span = new THREE.Mesh(new THREE.BoxGeometry(62, 3.8, 12), metal(0x4b4a45));
+      // Main sky-bridge deck + illuminated panoramic observation windows + rooftop dome
+      const span = new THREE.Mesh(new THREE.BoxGeometry(64, 4.4, 13), metal(0x4b4a45));
       span.position.y = 73; g.add(span);
+      const obsBand = new THREE.Mesh(new THREE.BoxGeometry(58, 1.6, 13.4), metal(0x182b3a, 0xa8efff, 1.35, { plain: true }));
+      obsBand.position.y = 73.2; g.add(obsBand);
+      const roofCab = new THREE.Mesh(new THREE.BoxGeometry(22, 4.8, 9.5), metal(0x3a434d, 0xa8efff, 0.52, { windows: true }));
+      roofCab.position.y = 77.6; g.add(roofCab);
+      const radome = new THREE.Mesh(new THREE.SphereGeometry(4.4, 10, 8, 0, TAU, 0, Math.PI * 0.55), metal(0x6b7c88, 0xa8efff, 0.35));
+      radome.position.y = 79.8; g.add(radome);
       for (let i = 0; i < 5; i++) {
         const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 34, 5), metal(0xceddec));
         cable.position.set(-22 + i * 11, 53 + Math.sin((i / 4) * Math.PI) * 16, 0);
         cable.rotation.z = (i - 2) * 0.22; g.add(cable);
       }
-      // Repeating hangers and lower maintenance cradles give the observatory a
-      // believable load path into the canyon walls and add parallax under the span.
       for (let i = 0; i < 4; i++) {
         const hx = -18 + i * 12;
-        const hanger = new THREE.Mesh(new THREE.BoxGeometry(0.75, 24 + (i % 2) * 8, 0.75), metal(0x303c47));
+        const hanger = new THREE.Mesh(new THREE.BoxGeometry(0.85, 24 + (i % 2) * 8, 0.85), metal(0x303c47));
         hanger.position.set(hx, 58 - (i % 2) * 3, 2.8); g.add(hanger);
-        const cradle = new THREE.Mesh(new THREE.BoxGeometry(8.6, 1.1, 5.2), metal(0x4c504a));
+        const cradle = new THREE.Mesh(new THREE.BoxGeometry(8.8, 1.25, 5.4), metal(0x4c504a));
         cradle.position.set(hx, 45 - (i % 2) * 6, 2.8); g.add(cradle);
-        lamp(hx, cradle.position.y + 2.0, 2.8, 0xa8efff, 0.34);
+        lamp(hx, cradle.position.y + 2.0, 2.8, 0xa8efff, 0.36);
       }
       const mist = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTexture(), color: 0xdff7ff, transparent: true, opacity: 0.38, depthWrite: false }));
       mist.position.set(0, 34, -5); mist.scale.set(46, 18, 1); g.add(mist);
+      // Solid multi-volume colliders: footing, twin pylons & segmented sky-bridge span
+      addSolid(0, 22, 0, 26, 24, 18);
+      addSolid(-16, 56, 0, 5.8, 38, 18);
+      addSolid(16, 56, 0, 5.8, 38, 18);
+      for (const sx of [-20, 0, 20]) addSolid(sx, 74.5, 0, 11.5, 5.5, 18);
     } else if (z.id === 'ember') {
-      // Layered heat-exchange stack: glowing conduits, exhaust crown and armoured fins.
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(30, 36, 9, 8), metal(0x34202d));
-      base.position.y = 4; g.add(base);
-      for (let i = 0; i < 3; i++) {
-        const stack = new THREE.Mesh(new THREE.CylinderGeometry(4.2 - i * 0.5, 6.4 - i * 0.4, 45 + i * 14, 7), metal(0x3b2631, z.rock.glow, 0.35));
-        stack.position.set((i - 1) * 12, 28 + i * 10, -4 + i * 5); g.add(stack);
-        const collar = new THREE.Mesh(new THREE.TorusGeometry(5.1 - i * 0.4, 0.6, 6, 12), metal(0x241721, z.rock.glow, 0.85));
-        collar.rotation.x = Math.PI / 2; collar.position.copy(stack.position); collar.position.y += (45 + i * 14) * 0.22; g.add(collar);
-        lamp(stack.position.x, stack.position.y + (45 + i * 14) * 0.5 + 2, stack.position.z, 0xff7040, 0.85);
+      // Heavy geothermal heat-exchange fortress: armoured core, glowing containment louvers, crane & manifolds.
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(31, 37, 10, 8), metal(0x34202d));
+      base.position.y = 4.5; g.add(base);
+      const catwalk = new THREE.Mesh(new THREE.TorusGeometry(32, 0.85, 6, 16), metal(0x221620, 0xff7040, 0.55));
+      catwalk.rotation.x = Math.PI / 2; catwalk.position.y = 9.8; g.add(catwalk);
+      // Glowing plasma core slits around the octagonal reactor base
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * TAU;
+        const louver = new THREE.Mesh(new THREE.BoxGeometry(4.2, 4.8, 0.6), metal(0x1d1119, 0xff6a38, 1.35));
+        louver.position.set(Math.cos(a) * 31.5, 5.2, Math.sin(a) * 31.5);
+        louver.rotation.y = -a + Math.PI / 2;
+        g.add(louver);
       }
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(78, 4.5, 18), metal(0x4c2b31, z.rock.glow, 0.45));
+      for (let i = 0; i < 3; i++) {
+        const stackH = 46 + i * 14;
+        const stack = new THREE.Mesh(new THREE.CylinderGeometry(4.4 - i * 0.5, 6.6 - i * 0.4, stackH, 8), metal(0x3b2631, z.rock.glow, 0.35));
+        stack.position.set((i - 1) * 12, 28 + i * 10, -4 + i * 5); g.add(stack);
+        const collar = new THREE.Mesh(new THREE.TorusGeometry(5.3 - i * 0.4, 0.65, 6, 12), metal(0x241721, z.rock.glow, 0.92));
+        collar.rotation.x = Math.PI / 2; collar.position.copy(stack.position); collar.position.y += stackH * 0.22; g.add(collar);
+        const capRing = new THREE.Mesh(new THREE.TorusGeometry(4.6 - i * 0.4, 0.45, 5, 10), metal(0x1f141c, 0xff8a46, 0.75));
+        capRing.rotation.x = Math.PI / 2; capRing.position.copy(stack.position); capRing.position.y += stackH * 0.48; g.add(capRing);
+        lamp(stack.position.x, stack.position.y + stackH * 0.5 + 2.2, stack.position.z, 0xff7040, 0.9);
+        addSolid(stack.position.x, stack.position.y, stack.position.z, 6.6 - i * 0.4, stackH * 0.52, 18);
+      }
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(78, 4.8, 18), metal(0x4c2b31, z.rock.glow, 0.45));
       fin.position.y = 24; fin.rotation.z = side * 0.24; g.add(fin);
-      // Repeating heat-sink plates and a lower intake turn the platform into an
-      // engineered exchanger rather than a single glowing slab.
       for (const finSide of [-1, 1]) {
         for (let i = 0; i < 5; i++) {
-          const sink = new THREE.Mesh(new THREE.BoxGeometry(1.0, 10 + (i % 2) * 3, 15), metal(0x251923, z.rock.glow, 0.14));
+          const sink = new THREE.Mesh(new THREE.BoxGeometry(1.1, 11 + (i % 2) * 3, 15.5), metal(0x251923, z.rock.glow, 0.16));
           sink.position.set(finSide * (20 + i * 6), 27 + (i % 2) * 2, -2 + (i % 2) * 4); sink.rotation.z = finSide * 0.10; g.add(sink);
         }
-        const intake = new THREE.Mesh(new THREE.CylinderGeometry(3.1, 3.8, 5.2, 8), metal(0x1d1820, 0xff7040, 0.38));
-        intake.position.set(finSide * 33, 6.0, 4); g.add(intake);
+        const sphere = new THREE.Mesh(new THREE.IcosahedronGeometry(4.6, 1), metal(0x2a1c26, 0xff6b38, 0.32));
+        sphere.position.set(finSide * 31, 11.5, -5); g.add(sphere);
+        const intake = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 4.0, 5.4, 8), metal(0x1d1820, 0xff7040, 0.42));
+        intake.position.set(finSide * 33, 6.2, 4); g.add(intake);
       }
-      // Insulated manifold pipes visibly carry heat from the exchange stacks to
-      // armoured side radiators; their hot collars pulse through the shared glow list.
       for (const pipeSide of [-1, 1]) {
-        const manifold = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.55, 44, 7), metal(0x2d1d27, z.rock.glow, 0.28));
+        const manifold = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.6, 44, 7), metal(0x2d1d27, z.rock.glow, 0.28));
         manifold.position.set(pipeSide * 31, 16, 7); manifold.rotation.z = pipeSide * 0.30; g.add(manifold);
         for (const py of [6, 18, 30]) {
-          const collar = new THREE.Mesh(new THREE.TorusGeometry(1.34, 0.17, 6, 10), metal(0x25131d, 0xff7040, 0.95));
+          const collar = new THREE.Mesh(new THREE.TorusGeometry(1.42, 0.18, 6, 10), metal(0x25131d, 0xff7040, 0.95));
           collar.rotation.x = Math.PI / 2; collar.position.set(pipeSide * 31, py, 7); g.add(collar);
           this.glows.push({ chunk, mat: collar.material, base: 0.95, amp: 0.34, off: py * 0.21 + pipeSide });
         }
       }
+      addSolid(0, 5, 0, 34, 6.5, 18);
+      for (const fx of [-24, 0, 24]) addSolid(fx, 24 + side * fx * 0.22, 0, 11, 6.5, 18);
     } else {
-      // A half-buried rift gate: broad foundations, a supported arch and signal nodes.
+      // Fortified desert rift-relay gate: stepped masonry plinth, clamped arch, glowing conduit columns & telemetry pod.
+      const riftGlow = this.stage >= 15 ? 0xb188ff : 0xffd77a;
       const plinth = new THREE.Mesh(new THREE.CylinderGeometry(36, 44, 10, 8), metal(0x7d6748));
-      plinth.position.y = 4; g.add(plinth);
-      const arch = new THREE.Mesh(new THREE.TorusGeometry(42, 4.8, 8, 18, Math.PI), metal(0x836a48, this.stage >= 15 ? 0x9a7aff : 0x000000, this.stage >= 15 ? 0.7 : 0));
+      plinth.position.y = 4.5; g.add(plinth);
+      const plinthTrim = new THREE.Mesh(new THREE.CylinderGeometry(38, 39, 1.8, 8), metal(0x524535));
+      plinthTrim.position.y = 10.0; g.add(plinthTrim);
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(42, 4.9, 8, 20, Math.PI), metal(0x836a48, this.stage >= 15 ? 0x9a7aff : 0x000000, this.stage >= 15 ? 0.72 : 0));
       arch.position.y = 16; arch.rotation.z = side * 0.1; g.add(arch);
+      // 5 armoured structural clamp collars around the arch span
+      for (let i = 1; i <= 5; i++) {
+        const a = (i / 6) * Math.PI + side * 0.1;
+        const clampBox = new THREE.Mesh(new THREE.BoxGeometry(5.5, 11.4, 11.2), metal(0x473d33, riftGlow, 0.28));
+        clampBox.position.set(Math.cos(a) * 42, 16 + Math.sin(a) * 42, 0);
+        clampBox.rotation.z = a;
+        g.add(clampBox);
+        addSolid(clampBox.position.x, clampBox.position.y, 0, 6.8, 6.8, 18);
+      }
       for (const sx of [-42, 42]) {
-        const support = new THREE.Mesh(new THREE.CylinderGeometry(7, 10, 42, 7), metal(0x6e5941));
+        const support = new THREE.Mesh(new THREE.CylinderGeometry(7.2, 10.4, 42, 8), metal(0x6e5941));
         support.position.set(sx, 20, 0); g.add(support);
-        lamp(sx, 39, 0, this.stage >= 15 ? 0xb188ff : 0xffd77a, 0.72);
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(1.4, 30, 0.5), metal(0x1f1d28, riftGlow, 1.35));
+        strip.position.set(sx, 21, 7.6); g.add(strip);
+        lamp(sx, 39.5, 0, riftGlow, 0.76);
+        addSolid(sx, 22, 0, 10.2, 22, 18);
       }
-      const obelisk = new THREE.Mesh(new THREE.ConeGeometry(8, 42, 5), metal(0x645140, this.stage >= 15 ? 0x865eff : 0x000000, this.stage >= 15 ? 0.5 : 0));
+      const obelisk = new THREE.Mesh(new THREE.ConeGeometry(8.2, 44, 6), metal(0x645140, this.stage >= 15 ? 0x865eff : 0x000000, this.stage >= 15 ? 0.55 : 0));
       obelisk.position.set(0, 26, -14); g.add(obelisk);
-      // Broken survey arches and ribbed signal conductors make the rift gate a
-      // constructed ruin. They remain outside the channel and have no collider.
+      const obRing = new THREE.Mesh(new THREE.TorusGeometry(6.2, 0.45, 5, 12), metal(0x2e2940, riftGlow, 0.95));
+      obRing.rotation.x = Math.PI / 2; obRing.position.set(0, 30, -14); g.add(obRing);
+      addSolid(0, 24, -14, 8.2, 22, 18);
       for (const riftSide of [-1, 1]) {
-        const buttress = new THREE.Mesh(new THREE.BoxGeometry(7, 24, 10), metal(0x594838));
+        const buttress = new THREE.Mesh(new THREE.BoxGeometry(7.4, 24, 10.4), metal(0x594838));
         buttress.position.set(riftSide * 27, 12, 7); buttress.rotation.z = riftSide * 0.22; g.add(buttress);
-        const conductor = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.92, 34, 6), metal(0x2e2940, this.stage >= 15 ? 0xa98aff : 0xffc66b, this.stage >= 15 ? 0.62 : 0.18));
+        const conductor = new THREE.Mesh(new THREE.CylinderGeometry(0.66, 0.96, 35, 6), metal(0x2e2940, riftGlow, this.stage >= 15 ? 0.68 : 0.26));
         conductor.position.set(riftSide * 29, 29, 7); conductor.rotation.z = riftSide * 0.20; g.add(conductor);
-        for (const py of [18, 31, 43]) lamp(riftSide * 29, py, 7, this.stage >= 15 ? 0xb188ff : 0xffd77a, 0.32);
+        for (const py of [18, 31, 43]) lamp(riftSide * 29, py, 7, riftGlow, 0.34);
       }
+      addSolid(0, 5, 0, 38, 6, 18);
     }
 
-    // A shared service apron ties every zone-specific landmark into the ground
-    // and repeats the route language in-world. It remains outside the safe lane
-    // and has no collider, so it adds parallax and scale without changing play.
+    // Shared fortified service apron: helipad H-markings, glowing approach chevrons, twin fuel tanks, command bunker & rotating radar dish.
     const accent = z.id === 'sea' ? 0x8eeaff : z.id === 'gorge' ? 0xa8efff : z.id === 'ember' ? 0xff7040 : (this.stage >= 15 ? 0xb188ff : 0xffd77a);
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(48, 2.2, 34), metal(z.id === 'ember' ? 0x34202d : z.id === 'sea' ? 0x223d50 : 0x5d5244));
-    deck.position.set(0, 1.1, 12); g.add(deck);
-    const trench = new THREE.Mesh(new THREE.BoxGeometry(39, 0.34, 1.15), metal(0x181d25, accent, 0.6));
-    trench.position.set(0, 2.32, 7); g.add(trench);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(48, 2.4, 34), metal(z.id === 'ember' ? 0x34202d : z.id === 'sea' ? 0x223d50 : 0x5d5244));
+    deck.position.set(0, 1.2, 12); g.add(deck);
+    const trench = new THREE.Mesh(new THREE.BoxGeometry(39, 0.36, 1.25), metal(0x181d25, accent, 0.95, { plain: true }));
+    trench.position.set(0, 2.52, 7); g.add(trench);
+    // Crisp helipad octagon ring & H-landing markings on the apron deck
+    const padRing = new THREE.Mesh(new THREE.TorusGeometry(6.8, 0.28, 5, 8), metal(0x281e12, 0xffca62, 1.05, { plain: true }));
+    padRing.rotation.x = Math.PI / 2; padRing.position.set(0, 2.55, 13.5); g.add(padRing);
+    const padH = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.22, 0.65), metal(0x281e12, 0xffca62, 1.1, { plain: true }));
+    padH.position.set(0, 2.55, 13.5); g.add(padH);
+    for (const hs of [-1, 1]) {
+      const hLeg = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.22, 4.6), metal(0x281e12, 0xffca62, 1.1, { plain: true }));
+      hLeg.position.set(hs * 2.2, 2.55, 13.5); g.add(hLeg);
+    }
     for (const lane of [-15, -5, 5, 15]) {
-      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.28, 27), metal(0x1e2730));
-      seam.position.set(lane, 2.32, 12); g.add(seam);
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.30, 27), metal(0x1e2730, 0x000000, 0, { plain: true }));
+      seam.position.set(lane, 2.52, 12); g.add(seam);
     }
     for (const sideDeck of [-1, 1]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(1.1, 5.6, 25), metal(0x28313a));
-      rail.position.set(sideDeck * 22, 4.0, 12); g.add(rail);
-      const brace = new THREE.Mesh(new THREE.BoxGeometry(1.6, 11, 1.4), metal(0x202832));
-      brace.position.set(sideDeck * 18, 5.5, 23); brace.rotation.z = sideDeck * 0.34; g.add(brace);
-      for (const localZ of [1, 22]) {
-        const beaconBase = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.15, 4, 6), metal(0x28313a));
-        beaconBase.position.set(sideDeck * 18, 3.1, localZ); g.add(beaconBase);
-        lamp(sideDeck * 18, 6.2, localZ, accent, 0.52);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(1.2, 5.8, 25), metal(0x28313a));
+      rail.position.set(sideDeck * 22, 4.1, 12); g.add(rail);
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(1.7, 11.5, 1.5), metal(0x202832));
+      brace.position.set(sideDeck * 18, 5.7, 23); brace.rotation.z = sideDeck * 0.34; g.add(brace);
+      // Twin pressurized cylindrical coolant/fuel tanks with saddle bands flanking the bunker
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.85, 1.85, 8.6, 8), metal(0x475462));
+      tank.rotation.z = Math.PI / 2; tank.position.set(sideDeck * 13.5, 4.3, 24); g.add(tank);
+      for (const tx of [-2.6, 2.6]) {
+        const strap = new THREE.Mesh(new THREE.TorusGeometry(1.96, 0.22, 5, 10), metal(0x202730, 0x000000, 0, { plain: true }));
+        strap.rotation.y = Math.PI / 2; strap.position.set(sideDeck * 13.5 + tx, 4.3, 24); g.add(strap);
       }
+      for (const localB of [1, 22]) {
+        const beaconBase = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.2, 4.2, 6), metal(0x28313a));
+        beaconBase.position.set(sideDeck * 18, 3.2, localB); g.add(beaconBase);
+        lamp(sideDeck * 18, 6.4, localB, accent, 0.56);
+      }
+      addSolid(sideDeck * 21.5, 4.5, 12, 3.2, 4.8, 14);
     }
-    const relay = new THREE.Mesh(new THREE.BoxGeometry(12, 5.6, 7), metal(0x2c3440));
-    relay.position.set(0, 5, 24); g.add(relay);
-    const relayCore = new THREE.Mesh(new THREE.SphereGeometry(1.45, 8, 6), metal(0x161b23, accent, 1.1));
-    relayCore.position.set(0, 7.0, 20.4); g.add(relayCore);
-    this.glows.push({ chunk, mat: relayCore.material, base: 1.1, amp: 0.38, off: rand(TAU) });
+    const relay = new THREE.Mesh(new THREE.BoxGeometry(14.0, 6.6, 8.6), metal(0x2c3440, accent, 0.55, { windows: true }));
+    relay.position.set(0, 5.5, 24); g.add(relay);
+    const relayRoof = new THREE.Mesh(new THREE.BoxGeometry(15.2, 1.0, 9.4), metal(0x202731));
+    relayRoof.position.set(0, 9.2, 24); g.add(relayRoof);
+    const relayVisor = new THREE.Mesh(new THREE.BoxGeometry(9.6, 1.2, 0.32), metal(0x141e2a, accent, 1.45, { plain: true }));
+    relayVisor.position.set(0, 6.5, 19.6); g.add(relayVisor);
+    const dishRotor = new THREE.Group();
+    dishRotor.position.set(3.4, 11.4, 24);
+    const relayDish = new THREE.Mesh(new THREE.ConeGeometry(3.2, 1.6, 10, 1, true), metal(0x5a6e82, accent, 0.42, { plain: true }));
+    relayDish.rotation.x = 0.52; dishRotor.add(relayDish);
+    const dishFeed = new THREE.Mesh(new THREE.SphereGeometry(0.65, 6, 5), metal(0x161b23, 0xffca62, 1.5, { plain: true }));
+    dishFeed.position.set(0, 0.8, 1.2); dishRotor.add(dishFeed);
+    g.add(dishRotor);
+    this.rotors.push({ chunk, obj: dishRotor, speed: 0.72 * side });
+    const relayCore = new THREE.Mesh(new THREE.SphereGeometry(1.5, 8, 6), metal(0x161b23, accent, 1.3, { plain: true }));
+    relayCore.position.set(-3.4, 10.6, 23.6); g.add(relayCore);
+    this.glows.push({ chunk, mat: relayCore.material, base: 1.3, amp: 0.44, off: rand(TAU) });
+    addSolid(0, 2.0, 12, 24, 2.8, 14);
+    addSolid(0, 5.8, 24, 8.0, 4.8, 16);
 
     chunk.add(g);
   }
@@ -1459,32 +1791,32 @@ export class Terrain {
         return shelf;
       }, 14);
     }
-    // Side stacks establish a continuous coast profile but remain outside the
-    // flight corridor and therefore never turn into arbitrary gameplay blocks.
-    for (let i = 0; i < 5; i++) {
+    // Side stacks establish a closer, dramatic coastal framing outside the safe corridor.
+    for (let i = 0; i < 6; i++) {
       const side = i % 2 ? 1 : -1;
-      const x = side * rand(325, 510);
-      const stack = buttressedCliff(rand(30, 52), rand(76, 154), z.rock.base, z.rock.top, { layers: 3, material: this.cliffMaterial });
+      const x = side * rand(235, 395);
+      const stack = buttressedCliff(rand(32, 54), rand(82, 165), z.rock.base, z.rock.top, { layers: 3, material: this.cliffMaterial });
       stack.position.set(x, -2.2, -rand(0, CHUNK_LEN));
+      const foam = new THREE.Mesh(new THREE.RingGeometry(42, 64, 18), seaFoamMat);
+      foam.rotation.x = -Math.PI / 2; foam.position.y = 2.6; stack.add(foam);
       chunk.add(stack);
     }
-    // Eroded shoreline shelves form a middle-distance coastline. They are visual only,
-    // so the existing beacon-marked route and collision layout remain unchanged.
     for (let i = 0; i < 2; i++) {
       const side = i ? 1 : -1;
-      const escarpment = erodedEscarpment(rand(52, 78), rand(38, 66), z.rock.base, z.rock.top, { side, layers: 4, material: this.cliffMaterial });
-      escarpment.position.set(side * rand(390, 540), -1.8, -rand(24, CHUNK_LEN - 24));
+      const escarpment = erodedEscarpment(rand(54, 82), rand(44, 72), z.rock.base, z.rock.top, { side, layers: 4, material: this.cliffMaterial });
+      escarpment.position.set(side * rand(290, 440), -1.8, -rand(24, CHUNK_LEN - 24));
       chunk.add(escarpment);
     }
-    // Infrequent weathered arches frame the coastal horizon. They sit beyond the
-    // collision field so the opening remains a landscape feature, not a lane gate.
     const coastOrdinal = Math.abs(Math.round(chunk.userData.virtualZ / CHUNK_LEN));
-    if (coastOrdinal % 4 === this.stageVariant) {
+    if (coastOrdinal % 3 === this.stageVariant) {
       const side = coastOrdinal % 2 ? 1 : -1;
-      const arch = naturalStoneArch(rand(88, 122), rand(78, 112), z.rock.base, z.rock.top, this.cliffMaterial);
-      arch.position.set(side * rand(430, 560), -1.5, -rand(76, CHUNK_LEN - 54));
+      const arch = naturalStoneArch(rand(92, 128), rand(86, 120), z.rock.base, z.rock.top, this.cliffMaterial);
+      arch.position.set(side * rand(285, 420), -1.5, -rand(76, CHUNK_LEN - 54));
       arch.rotation.y = side * rand(-0.36, 0.36);
       chunk.add(arch);
+    }
+    if (coastOrdinal % 3 === (this.stageVariant + 2) % 3) {
+      this._scenicOverheadArch(chunk, z, -CHUNK_LEN * 0.55);
     }
     // A single broad coastal fall gives the middle distance a cool vertical cue;
     // it is pure scenery and is intentionally placed on the far sea wall.
@@ -1507,53 +1839,58 @@ export class Terrain {
       const side = Math.random() < 0.5 ? 1 : -1;
       const far = Math.random() < 0.5;
       const mesa = makeRock(rand(70, 130), rand(100, 190), z.rock.base, z.rock.top, 6);
-      mesa.position.set(side * rand(far ? 700 : 440, far ? 1100 : 700), 20, -rand(0, CHUNK_LEN));
+      mesa.position.set(side * rand(far ? 620 : 380, far ? 980 : 620), 20, -rand(0, CHUNK_LEN));
       chunk.add(mesa);
     }
     this._aerialLayer(chunk, z);
-    // Large artificial towers and ring gates are disabled to keep the route open.
   }
 
   /* ================= GORGE ================= */
   _popGorge(chunk, z) {
-    // outer canyon walls (framing), pushed out for the wide corridor
+    // Sunlit sandstone canyon walls closer to the flanks for exhilarating ravine scale (STAR_FOX_1.jpeg)
     for (let side = -1; side <= 1; side += 2) {
       let zz = 0;
       while (zz < CHUNK_LEN) {
-        const w = rand(34, 60), h = rand(90, 200);
-        const x = side * rand(255, 335);
+        const w = rand(36, 62), h = rand(105, 210);
+        const x = side * rand(210, 290);
         const rock = buttressedCliff(w, h, z.rock.base, z.rock.top, { layers: pick([3, 4]), material: this.cliffMaterial });
         rock.position.set(x, 0, -zz);
         chunk.add(rock);
-        if (Math.random() < 0.8) {
-          const moss = mossLedge(w * rand(0.80, 1.15), z.rock.moss);
+        if (Math.random() < 0.85) {
+          const moss = mossLedge(w * rand(0.84, 1.2), z.rock.moss);
           moss.position.set(x + rand(-6, 6), h * 0.3 + h * 0.5 - rand(2, 8), -zz);
           chunk.add(moss);
-          // trees perched on the cliff
           for (let t = 0; t < 3; t++) {
-            const tree = conifer(rand(1.4, 2.4), 0x6b4a2e, z.rock.moss);
+            const tree = conifer(rand(1.6, 2.7), 0x6b4a2e, z.rock.moss);
             tree.position.set(x + rand(-w, w) * 0.7, h * 0.3 + h * 0.5 - 4, -zz + rand(-w, w));
             chunk.add(tree);
           }
         }
-        // waterfall sheet on the inner face
-        if (Math.random() < 0.55) {
-          const fw = rand(12, 26), fh = h * rand(0.7, 0.95);
+        // Cascading waterfall + animated plunge spray & glowing foam collar
+        if (Math.random() < 0.65) {
+          const fw = rand(14, 28), fh = h * rand(0.74, 0.96);
           const tex = waterfallTexture();
-          tex.repeat.set(1, fh / 40);
-          const mat = new THREE.MeshToonMaterial({ map: tex, gradientMap: toonGradient(), transparent: true, opacity: 0.95 });
+          tex.repeat.set(1, fh / 38);
+          const mat = new THREE.MeshToonMaterial({ map: tex, gradientMap: toonGradient(), transparent: true, opacity: 0.94, emissive: 0x4ca8e8, emissiveIntensity: 0.25 });
           mat.chunk = chunk;
           this.waterfallMats.push(mat);
           const fall = new THREE.Mesh(new THREE.PlaneGeometry(fw, fh), mat);
           fall.position.set(x - side * (w * 0.72), fh / 2 + 1, -zz);
           fall.rotation.y = side > 0 ? -Math.PI / 2 * 0.92 : Math.PI / 2 * 0.92;
+          fall.userData.noCollide = true;
           chunk.add(fall);
-          const foam = new THREE.Mesh(new THREE.CylinderGeometry(fw * 0.7, fw * 0.9, 1.6, 10),
-            toonMat(0xeaf6ff, { transparent: true, opacity: 0.85, flat: true }));
-          foam.position.set(fall.position.x - side * 2, 1.2, -zz);
+          const foam = new THREE.Mesh(new THREE.CylinderGeometry(fw * 0.82, fw * 1.15, 2.0, 12),
+            toonMat(0xeefcff, { transparent: true, opacity: 0.88, emissive: 0x9eeeff, emissiveIntensity: 0.28, flat: true }));
+          foam.position.set(fall.position.x - side * 2.5, 1.2, -zz);
+          foam.userData.noCollide = true;
           chunk.add(foam);
+          const spray = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTexture(), color: 0xe6fbff, transparent: true, opacity: 0.48, depthWrite: false, fog: true }));
+          spray.position.set(fall.position.x - side * 4, 8.5, -zz);
+          spray.scale.set(fw * 2.2, fw * 1.1, 1);
+          spray.userData.noCollide = true;
+          chunk.add(spray);
         }
-        zz += rand(60, 110);
+        zz += rand(58, 102);
       }
     }
     // Broad, stepped cliff shoulders break the evenly-spaced wall rhythm and create
@@ -1607,37 +1944,37 @@ export class Terrain {
         return talus;
       }, 15);
     }
-    // Large centreline mountain passages and arches are intentionally disabled.
-    // Their visual mass obstructed the flight view without adding useful gameplay.
+    // Monumental scenic fly-under natural rock bridge (non-colliding high clearance!)
+    if (gorgeOrdinal % 2 === 0) {
+      this._scenicOverheadArch(chunk, z, -CHUNK_LEN * 0.52);
+    }
     this._aerialLayer(chunk, z);
-    // Large artificial towers and ring gates are disabled to keep the route open.
   }
 
   /* ================= EMBER ================= */
   _popEmber(chunk, z) {
     chunk.add(this._groundStrip(chunk, 1400, 5.5, z.ground.base, z.ground.lit, null, this.floorMaterial ?? emberGroundMat));
-    // outer dark-red canyon walls
+    // Dramatic volcanic canyon walls with glowing fins closer to the corridor (STAR_FOX_2.jpeg)
     for (let side = -1; side <= 1; side += 2) {
       let zz = 0;
       while (zz < CHUNK_LEN) {
-        const w = rand(30, 54), h = rand(100, 220);
-        const x = side * rand(315, 395);
+        const w = rand(32, 56), h = rand(110, 225);
+        const x = side * rand(235, 320);
         const rock = buttressedCliff(w, h, z.rock.base, z.rock.top, { layers: pick([3, 4]), material: this.cliffMaterial });
         rock.position.set(x, 0, -zz);
         chunk.add(rock);
-        // glowing red fin panels (concept 2)
-        if (Math.random() < 0.6) {
+        if (Math.random() < 0.72) {
           const fin = new THREE.Mesh(
-            new THREE.BoxGeometry(rand(16, 30), rand(3, 5), rand(6, 10)),
-            toonMat(0x30161f, { emissive: z.rock.glow, emissiveIntensity: 1.5 })
+            new THREE.BoxGeometry(rand(18, 34), rand(3.5, 5.8), rand(7, 11)),
+            toonMat(0x36151c, { emissive: z.rock.glow, emissiveIntensity: 1.85 })
           );
-          fin.position.set(x - side * w * 0.6, rand(24, h * 0.6), -zz + rand(-10, 10));
+          fin.position.set(x - side * w * 0.65, rand(22, h * 0.62), -zz + rand(-10, 10));
           fin.rotation.z = side * rand(0.5, 0.9);
           fin.rotation.y = rand(-0.4, 0.4);
           chunk.add(fin);
-          this.glows.push({ chunk, mat: fin.material, base: 1.5, amp: 0.6, off: rand(TAU) });
+          this.glows.push({ chunk, mat: fin.material, base: 1.85, amp: 0.65, off: rand(TAU) });
         }
-        zz += rand(60, 110);
+        zz += rand(58, 105);
       }
     }
     // Stepped basalt shoulders add a geological middle layer rather than another
@@ -1721,8 +2058,10 @@ export class Terrain {
       mesa.position.set(side * rand(500, 950), 0, -rand(0, CHUNK_LEN));
       chunk.add(mesa);
     }
+    if (emberOrdinal % 3 === 1) {
+      this._scenicOverheadArch(chunk, z, -CHUNK_LEN * 0.48);
+    }
     this._aerialLayer(chunk, z);
-    // Large artificial towers and ring gates are disabled to keep the route open.
   }
 
   /* ================= DUNE ================= */
@@ -1732,8 +2071,8 @@ export class Terrain {
     // while remaining visual-only beyond the navigation channel.
     for (let i = 0; i < 2; i++) {
       const side = i ? 1 : -1;
-      const escarpment = erodedEscarpment(rand(66, 104), rand(24, 46), z.sand.shade, z.sand.lit, { side, layers: 3, material: this.cliffMaterial });
-      escarpment.position.set(side * rand(360, 520), -2.0, -rand(26, CHUNK_LEN - 26));
+      const escarpment = erodedEscarpment(rand(66, 104), rand(28, 52), z.sand.shade, z.sand.lit, { side, layers: 3, material: this.cliffMaterial });
+      escarpment.position.set(side * rand(245, 380), -2.0, -rand(26, CHUNK_LEN - 26));
       escarpment.scale.z = rand(1.6, 2.5);
       chunk.add(escarpment);
     }
@@ -1781,20 +2120,22 @@ export class Terrain {
         return site;
       }, 16);
     }
-    // half-buried wreckage + scattered rocks across the width
-    for (let i = 0; i < 7; i++) {
-      if (Math.random() < 0.5) {
-        const r = makeRock(rand(6, 16), rand(10, 28), z.rock.base, z.rock.top, 6);
-        r.position.set(rand(-FIELD * 1.4, FIELD * 1.4), 4, -rand(0, CHUNK_LEN));
+    // half-buried wreckage + scattered rocks strictly outside the navigable central lane
+    for (let i = 0; i < 5; i++) {
+      const localZ = -rand(20, CHUNK_LEN - 20);
+      const route = flightRoute(z.id, chunk.userData.virtualZ + localZ);
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const sx = route.center + side * rand(route.halfWidth + 72, FIELD * 1.35);
+      if (i >= 2 || Math.random() < 0.55) {
+        const r = makeRock(rand(6, 15), rand(10, 26), z.rock.base, z.rock.top, 6);
+        r.position.set(sx, 4, localZ);
         chunk.add(r);
       } else {
-        const wreck = new THREE.Mesh(
-          new THREE.BoxGeometry(rand(6, 18), rand(1.5, 4), rand(2, 6)),
-          toonMat(pick([0x8a7a68, 0x6e5f52, 0x9a8874]), { flat: true })
-        );
-        wreck.position.set(rand(-FIELD, FIELD), rand(1, 3), -rand(0, CHUNK_LEN));
-        wreck.rotation.set(rand(-0.4, 0.4), rand(TAU), rand(-0.5, 0.5));
+        const wreck = desertWreckage(rand(0.95, 1.45));
+        wreck.position.set(sx, 0.4, localZ);
+        wreck.rotation.y = rand(TAU);
         chunk.add(wreck);
+        if (wreck.userData.glowMat) this.glows.push({ chunk, mat: wreck.userData.glowMat, base: 1.5, amp: 0.55, off: rand(TAU) });
       }
     }
     // Monumental centreline gates are disabled to preserve an open flight view.
@@ -1817,11 +2158,103 @@ export class Terrain {
     for (let i = 0; i < 2; i++) {
       const side = Math.random() < 0.5 ? 1 : -1;
       const ridge = buttressedCliff(rand(120, 200), rand(74, 142), z.sand.shade, z.sand.lit, { layers: 3, material: this.cliffMaterial });
-      ridge.position.set(side * rand(500, 950), 0, -rand(0, CHUNK_LEN));
+      ridge.position.set(side * rand(370, 720), 0, -rand(0, CHUNK_LEN));
       chunk.add(ridge);
     }
+    if (duneOrdinal % 3 === 0) {
+      this._scenicOverheadArch(chunk, z, -CHUNK_LEN * 0.50);
+    }
     this._aerialLayer(chunk, z);
-    // Large artificial towers and ring gates are disabled to keep the route open.
+  }
+
+  /**
+   * Towering, purely scenic (noCollide) natural stone arch spanning HIGH over the
+   * flight corridor (opening clearance > 105 units high & > 220 units wide).
+   * Gives exhilarating Star Fox 3D depth & speed parallax without ever blocking flight!
+   */
+  _scenicOverheadArch(chunk, z, zpos) {
+    const route = flightRoute(z.id, chunk.userData.virtualZ + zpos);
+    const cx = route.center;
+    const R = rand(142, 168);
+    const tube = rand(14, 20);
+    const root = new THREE.Group();
+    root.userData.noCollide = true;
+    const material = this.cliffMaterial ?? stableCliffMaterial(z.id);
+
+    const segments = 12;
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const a = Math.PI * t;
+      const ax = cx + Math.cos(a) * R, ay = 8 + Math.sin(a) * R * 0.88, az = zpos + Math.sin(a * 2) * 5;
+      const rock = makeCliffRock(
+        tube * rand(0.86, 1.18),
+        tube * rand(1.9, 2.6),
+        z.rock.base, z.rock.top, 8, material
+      );
+      rock.position.set(ax, ay, az);
+      rock.rotation.set(rand(-0.14, 0.14), a + Math.PI / 2, rand(-0.22, 0.22));
+      root.add(rock);
+      // Hanging underside stalactite stone teeth & upper crown ledges give rich silhouette under the arch
+      if (i >= 2 && i <= segments - 2 && i % 2 === 0) {
+        const tooth = new THREE.Mesh(new THREE.ConeGeometry(tube * rand(0.28, 0.46), tube * rand(1.1, 1.8), 6), material);
+        tooth.rotation.x = Math.PI;
+        tooth.position.set(ax, ay - tube * 1.15, az + rand(-4, 4));
+        root.add(tooth);
+      }
+    }
+    for (const side of [-1, 1]) {
+      const foot = buttressedCliff(tube * 1.65, R * 0.48, z.rock.base, z.rock.top, { layers: 3, material });
+      foot.position.set(cx + side * R * 1.02, 0, zpos);
+      root.add(foot);
+      if (z.id === 'sea') {
+        const foam = new THREE.Mesh(new THREE.RingGeometry(tube * 2.1, tube * 3.1, 16), seaFoamMat);
+        foam.rotation.x = -Math.PI / 2; foam.position.set(cx + side * R * 1.02, 1.9, zpos);
+        root.add(foam);
+        // Coastal arch pier navigation strobe light
+        const bMat = toonMat(0x16222c, { emissive: 0x7be8ff, emissiveIntensity: 1.5, flat: true });
+        const beacon = new THREE.Mesh(new THREE.OctahedronGeometry(2.6, 0), bMat);
+        beacon.position.set(cx + side * R * 0.88, 34, zpos + 8);
+        root.add(beacon);
+        this.glows.push({ chunk, mat: bMat, base: 1.5, amp: 0.5, off: side });
+      }
+    }
+    if (z.rock.moss) {
+      const moss = mossLedge(tube * 2.6, z.rock.moss);
+      moss.position.set(cx, 8 + R * 0.88 + tube * 0.9, zpos);
+      root.add(moss);
+      // Crown-top alpine conifers perched along the natural canyon bridge!
+      for (const tx of [-28, -8, 12, 30]) {
+        const pine = conifer(rand(1.8, 2.8), 0x6b4a2e, z.rock.moss);
+        pine.position.set(cx + tx, 8 + R * 0.88 + tube * 0.72 - Math.abs(tx) * 0.14, zpos + rand(-6, 6));
+        root.add(pine);
+      }
+    }
+    if (z.id === 'ember' && z.rock.glow) {
+      for (const side of [-1, 1]) {
+        const vein = new THREE.Mesh(
+          new THREE.BoxGeometry(1.8, 28, 1.8),
+          toonMat(0x28141a, { emissive: z.rock.glow, emissiveIntensity: 1.55, flat: true })
+        );
+        vein.position.set(cx + side * R * 0.72, R * 0.56, zpos);
+        vein.rotation.z = side * 0.55;
+        root.add(vein);
+        this.glows.push({ chunk, mat: vein.material, base: 1.55, amp: 0.45, off: rand(TAU) });
+        // Bolted industrial mining truss clamp bracing the volcanic arch shoulder
+        const clamp = new THREE.Mesh(new THREE.BoxGeometry(6.5, 22, 10), toonMat(0x302128, { map: terrainArmorTex, flat: true }));
+        clamp.position.set(cx + side * R * 0.88, R * 0.36, zpos);
+        clamp.rotation.z = side * 0.25;
+        root.add(clamp);
+      }
+    } else if (z.id === 'dune') {
+      // Carved ancient stone keystone arch crown + weathered relief ribs
+      const keystone = new THREE.Mesh(new THREE.BoxGeometry(tube * 1.6, tube * 2.2, tube * 2.2), toonMat(0x9a825d, { map: terrainArmorTex, flat: true }));
+      keystone.position.set(cx, 8 + R * 0.88, zpos);
+      root.add(keystone);
+      const glyph = new THREE.Mesh(new THREE.BoxGeometry(tube * 1.1, tube * 0.36, tube * 2.35), toonMat(0x241d15, { emissive: this.stage >= 15 ? 0xb188ff : 0xffd77a, emissiveIntensity: 1.25, flat: true }));
+      glyph.position.set(cx, 8 + R * 0.88, zpos);
+      root.add(glyph);
+    }
+    chunk.add(root);
   }
 
   /* ---------- shared decorative structures ---------- */
@@ -2022,112 +2455,231 @@ export class Terrain {
   }
 
   _aerialLayer(chunk, z) {
-    if (Math.random() > 0.72) return;
+    if (Math.random() > 0.42) return;
     const side = Math.random() < 0.5 ? -1 : 1;
     const cz = -rand(24, CHUNK_LEN - 24);
     const route = flightRoute(z.id, chunk.userData.virtualZ + cz);
-    const x = route.center + side * rand(route.halfWidth + (z.id === 'ember' ? 138 : 56), FIELD * 0.88);
+    const x = route.center + side * rand(route.halfWidth + 118, route.halfWidth + 198);
     const h = rand(112, 180);
-    const w = rand(9, 15);
+    const w = rand(9, 14);
+    const accent = z.rock.glow ?? (z.id === 'sea' ? 0x7be8ff : z.id === 'gorge' ? 0x9deaff : 0xffd77a);
     const foot = makeRock(w * 2.2, h * 0.26, z.rock.base, z.rock.top, pick([6, 7]));
     foot.position.set(x, h * 0.10, cz);
     chunk.add(foot);
-    const spire = makeRock(w, h, z.rock.base, z.rock.top, pick([6, 7]));
+    const spire = makeRock(w, h, z.rock.base, z.rock.top, pick([7, 8]));
     spire.position.set(x + side * rand(-2, 2), h * 0.34, cz);
     this._obstacle(chunk, spire, w * 1.1, 18);
-    const ledge = new THREE.Mesh(new THREE.CylinderGeometry(w * 1.34, w * 1.58, 2.4, 7), toonMat(z.rock.top, { flat: true }));
-    ledge.position.set(x, h * 0.46, cz); chunk.add(ledge);
-    if (z.rock.moss && Math.random() < 0.55) {
+    // Only half of skyline spires carry a bolted steel lookout deck; others stay crisp natural spires
+    if (Math.random() < 0.5) {
+      const deckY = h * 0.48;
+      const ledge = new THREE.Mesh(new THREE.CylinderGeometry(w * 1.42, w * 1.55, 2.6, 8), toonMat(0x3a4654, { map: terrainArmorTex, flat: true }));
+      ledge.position.set(x, deckY, cz);
+      this._obstacle(chunk, ledge, w * 1.45, 16, true);
+      const rimLight = new THREE.Mesh(new THREE.TorusGeometry(w * 1.46, 0.30, 5, 16), toonMat(0x161f2b, { emissive: accent, emissiveIntensity: 1.25, flat: true }));
+      rimLight.rotation.x = Math.PI / 2; rimLight.position.set(x, deckY + 1.4, cz);
+      rimLight.userData.noCollide = true; chunk.add(rimLight);
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * TAU;
+        const strut = new THREE.Mesh(new THREE.BoxGeometry(1.1, w * 1.55, 1.1), toonMat(0x252e3a, { flat: true }));
+        strut.position.set(x + Math.cos(a) * w * 1.08, deckY - w * 0.65, cz + Math.sin(a) * w * 1.08);
+        strut.rotation.z = Math.cos(a) * 0.48; strut.rotation.x = -Math.sin(a) * 0.48;
+        strut.userData.noCollide = true; chunk.add(strut);
+      }
+      const obsPod = new THREE.Mesh(new THREE.BoxGeometry(w * 0.85, 4.4, w * 0.78), toonMat(0x475564, { map: terrainArmorTex, flat: true }));
+      obsPod.position.set(x - side * w * 1.12, deckY + 3.4, cz);
+      obsPod.userData.noCollide = true; chunk.add(obsPod);
+      const obsVisor = new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.2, w * 0.62), toonMat(0x14202c, { emissive: accent, emissiveIntensity: 1.4, flat: true }));
+      obsVisor.position.set(x - side * (w * 1.56), deckY + 3.8, cz);
+      obsVisor.userData.noCollide = true; chunk.add(obsVisor);
+      const crownBeacon = new THREE.Mesh(new THREE.OctahedronGeometry(1.8, 0), toonMat(0x161a24, { emissive: accent, emissiveIntensity: 1.65, flat: true }));
+      crownBeacon.position.set(x, h * 0.85, cz);
+      crownBeacon.userData.noCollide = true; chunk.add(crownBeacon);
+      this.glows.push({ chunk, mat: crownBeacon.material, base: 1.65, amp: 0.52, off: rand(TAU) });
+    }
+    if (z.rock.moss && Math.random() < 0.65) {
       const cap = mossCap(w * 1.18, z.rock.moss);
       cap.position.set(x, h * 0.34 + h * 0.5 - 4, cz); chunk.add(cap);
     }
   }
 
-  /** a complex multi-tier tower / ruin reaching high — collidable at every tier */
+  /** Fortified multi-tier watchtower / sky-citadel — solid collidable at every tier with window grids, buttress wings & rotating radar */
   _megaTower(chunk, z, x, cz) {
+    const accent = z.rock.glow ?? (z.id === 'sea' ? 0x7be8ff : z.id === 'gorge' ? 0x9deaff : 0xffd77a);
+    const steelCol = z.id === 'ember' ? 0x452b37 : z.id === 'sea' ? 0x32526a : 0x5c554c;
+    const winMat = toonMat(steelCol, { map: terrainWindowTex, emissive: accent, emissiveIntensity: 0.62, flat: true });
+    winMat.emissiveMap = terrainWindowTex;
+    const armorMat = toonMat(steelCol, { map: terrainArmorTex, emissive: steelCol, emissiveIntensity: 0.12, flat: true });
+    const darkArmor = toonMat(0x26303d, { map: terrainArmorTex, flat: true });
     let baseY = -3;
-    let r = rand(17, 24);
+    let r = rand(17, 23);
     const tiers = 2 + (Math.random() < 0.5 ? 1 : 0);
     for (let i = 0; i < tiers; i++) {
-      const h = rand(30, 46);
-      const seg = makeRock(r, h, z.rock.base, z.rock.top, pick([6, 7]));
+      const h = rand(30, 44);
+      const seg = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 0.86, r * 1.02, h, 8),
+        i === 0 ? armorMat : winMat
+      );
       seg.position.set(x, baseY + h / 2, cz);
-      this._obstacle(chunk, seg, r * 0.95, 20);
-      // protruding ledge blocks + buttresses
-      for (let b = 0; b < 2; b++) {
-        const bw = rand(5, 9);
-        const blk = new THREE.Mesh(new THREE.BoxGeometry(bw, bw * 0.55, bw), toonMat(z.rock.top, { flat: true }));
-        const a = rand(TAU);
-        blk.position.set(x + Math.cos(a) * r * 0.96, baseY + rand(3, h - 3), cz + Math.sin(a) * r * 0.96);
-        blk.rotation.y = a;
-        chunk.add(blk);
+      this._obstacle(chunk, seg, r * 0.96, 20, true);
+      // 4 sweeping vertical armored buttress fin ribs + illuminated observation deck band on each tier
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * TAU + i * 0.4;
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(2.4, h * 0.94, 4.2), darkArmor);
+        rib.position.set(x + Math.cos(a) * r * 0.96, baseY + h * 0.5, cz + Math.sin(a) * r * 0.96);
+        rib.rotation.y = -a;
+        rib.userData.noCollide = true;
+        chunk.add(rib);
       }
-      // ring band between tiers
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.05, r * 1.05, 2.5, 7), toonMat(z.rock.top, { flat: true }));
+      const winBand = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 0.94, r * 0.96, 2.4, 8),
+        toonMat(0x141f2c, { emissive: accent, emissiveIntensity: 1.35, flat: true })
+      );
+      winBand.position.set(x, baseY + h * 0.72, cz);
+      winBand.userData.noCollide = true;
+      chunk.add(winBand);
+      // Cantilevered defense balcony pods with illuminated deck trim
+      for (let b = 0; b < 2; b++) {
+        const bw = rand(6.2, 10.2);
+        const a = b * Math.PI + i * 0.85;
+        const blk = new THREE.Mesh(new THREE.BoxGeometry(bw, bw * 0.45, bw * 0.85), armorMat);
+        blk.position.set(x + Math.cos(a) * r * 1.04, baseY + h * (0.36 + b * 0.24), cz + Math.sin(a) * r * 1.04);
+        blk.rotation.y = -a;
+        blk.userData.noCollide = true;
+        chunk.add(blk);
+        const gunTip = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 5.2, 6), darkArmor);
+        gunTip.rotation.z = Math.PI / 2;
+        gunTip.position.set(x + Math.cos(a) * (r * 1.04 + bw * 0.55), blk.position.y + 1.2, cz + Math.sin(a) * (r * 1.04 + bw * 0.55));
+        gunTip.rotation.y = -a;
+        gunTip.userData.noCollide = true;
+        chunk.add(gunTip);
+      }
+      // stepped armoured ring collar between tiers
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.10, r * 1.15, 3.0, 8), darkArmor);
       band.position.set(x, baseY + h, cz);
+      band.userData.noCollide = true;
       chunk.add(band);
-      baseY += h * 0.9;
-      r *= rand(0.72, 0.82);
+      baseY += h * 0.92;
+      r *= rand(0.70, 0.80);
     }
-    // crowning beacon / cap
-    if (z.rock.glow || z.id === 'ember') {
-      const g = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTexture(), color: z.rock.glow ?? 0xff6a3e, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-      g.scale.setScalar(6); g.position.set(x, baseY + 4, cz);
-      chunk.add(g);
-    } else if (z.rock.moss) {
-      const cap = mossCap(r * 1.3, z.rock.moss);
-      cap.position.set(x, baseY + 2, cz); chunk.add(cap);
-    } else {
-      const crown = makeRock(r * 1.05, r * 0.72, z.rock.base, z.rock.top, 6);
-      crown.position.set(x, baseY + r * 0.18, cz); chunk.add(crown);
+    // Crowning command spire, animated dual-dish radar rotor & pulsing aviation strobe
+    const mastH = 24;
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.8, mastH, 6), darkArmor);
+    mast.position.set(x, baseY + mastH * 0.5, cz);
+    this._obstacle(chunk, mast, 2.4, 14, true);
+    const radarRotor = new THREE.Group();
+    radarRotor.position.set(x, baseY + mastH * 0.58, cz);
+    radarRotor.userData.noCollide = true;
+    const dishMat = toonMat(0x5e768c, { emissive: accent, emissiveIntensity: 0.42, flat: true, side: THREE.DoubleSide });
+    for (const ds of [-1, 1]) {
+      const dish = new THREE.Mesh(new THREE.ConeGeometry(5.6, 2.2, 10, 1, true), dishMat);
+      dish.position.set(ds * 3.8, 0, 0);
+      dish.rotation.z = ds * -0.95;
+      radarRotor.add(dish);
     }
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(8.2, 0.9, 0.9), darkArmor);
+    radarRotor.add(bar);
+    chunk.add(radarRotor);
+    this.rotors.push({ chunk, obj: radarRotor, speed: 0.85 });
+    const beacon = new THREE.Mesh(new THREE.OctahedronGeometry(2.4, 0), toonMat(0x161a24, { emissive: accent, emissiveIntensity: 1.8, flat: true }));
+    beacon.position.set(x, baseY + mastH + 1.6, cz);
+    beacon.userData.noCollide = true;
+    chunk.add(beacon);
+    this.glows.push({ chunk, mat: beacon.material, base: 1.8, amp: 0.60, off: rand(TAU) });
   }
 
-  /** big decorative ring gate you can fly through (adds vertical structure) */
+  /** Engineered tactical ring gate you can fly cleanly through — solid clamped rim, cardinal energy projectors & twin pier bunkers */
   _ringGate(chunk, z, x, cz) {
-    const R = rand(38, 60);
-    const tube = rand(3, 5);
-    const ringY = R + rand(4, 30);
-    const rotZ = rand(-0.3, 0.3);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(R, tube, 8, 20), toonMat(z.rock.base, { flat: true }));
+    const R = rand(34, 48);
+    const tube = rand(3.0, 4.4);
+    const ringY = R + rand(6, 28);
+    const rotZ = rand(-0.26, 0.26);
+    const accent = z.rock.glow ?? (z.id === 'sea' ? 0x7fe9ff : z.id === 'gorge' ? 0x9deaff : 0xffd77a);
+    const ringMat = toonMat(z.id === 'ember' ? 0x452d38 : 0x4b5b6e, { map: terrainArmorTex, emissive: 0x161d28, emissiveIntensity: 0.24, flat: true });
+    const darkMat = toonMat(0x28313e, { map: terrainArmorTex, flat: true });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(R, tube, 8, 24), ringMat);
     ring.position.set(x, ringY, cz);
     ring.rotation.z = rotZ;
     ring.userData.noCollide = true; // bbox would plug the opening — rim colliders added below
     chunk.add(ring);
-    // solid rim: trace the full ring with colliders, leaving the centre passable
-    this._torusColliders(chunk, x, ringY, cz, R, tube, 0, TAU, rotZ, 14);
-    // Twin foundations make the ring a supported gateway rather than a loose
-    // torus in the air. The opening stays clear because the supports sit on the
-    // outer lower quadrants, beyond the central flight aperture.
+    // Double-flanged outer armor track & inner glowing energy guide ring around the aperture
+    const outerFlange = new THREE.Mesh(new THREE.TorusGeometry(R + tube * 0.92, tube * 0.34, 6, 24), darkMat);
+    outerFlange.position.set(x, ringY, cz);
+    outerFlange.rotation.z = rotZ;
+    outerFlange.userData.noCollide = true;
+    chunk.add(outerFlange);
+    const innerTrack = new THREE.Mesh(
+      new THREE.TorusGeometry(R - tube * 0.85, 0.52, 5, 24),
+      toonMat(0x161e2a, { emissive: accent, emissiveIntensity: 1.45, flat: true })
+    );
+    innerTrack.position.set(x, ringY, cz);
+    innerTrack.rotation.z = rotZ;
+    innerTrack.userData.noCollide = true;
+    chunk.add(innerTrack);
+    // solid rim: trace the full ring with structural colliders, leaving the centre passable
+    this._torusColliders(chunk, x, ringY, cz, R, tube, 0, TAU, rotZ, 14, true);
+    // Twin fortified pier foundations with window-grid control bunkers & diagonal brace struts
     for (const side of [-1, 1]) {
       const sx = x + side * R * 0.74;
       const supportH = Math.max(12, ringY * 0.94);
-      const support = new THREE.Mesh(new THREE.CylinderGeometry(tube * 1.65, tube * 2.25, supportH, 7), toonMat(z.rock.base, { flat: true }));
+      const support = new THREE.Mesh(new THREE.CylinderGeometry(tube * 1.65, tube * 2.25, supportH, 8), ringMat);
       support.position.set(sx, supportH * 0.5 - 1, cz);
-      this._obstacle(chunk, support, tube * 2.25, 14);
-      const footing = new THREE.Mesh(new THREE.CylinderGeometry(tube * 3.4, tube * 4.2, tube * 1.15, 8), toonMat(z.rock.top, { flat: true }));
-      footing.position.set(sx, tube * 0.55 - 1, cz); chunk.add(footing);
-      const collar = new THREE.Mesh(new THREE.CylinderGeometry(tube * 2.05, tube * 2.25, tube * 0.55, 8), toonMat(z.rock.top, { flat: true }));
-      collar.position.set(sx, supportH * 0.74, cz); chunk.add(collar);
+      this._obstacle(chunk, support, tube * 2.25, 16, true);
+      // Diagonal structural truss strut reinforcing pier into the ring body
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(tube * 1.1, supportH * 0.55, tube * 1.2), darkMat);
+      brace.position.set(sx + side * tube * 2.6, supportH * 0.34, cz);
+      brace.rotation.z = side * 0.36;
+      brace.userData.noCollide = true;
+      chunk.add(brace);
+      const footing = new THREE.Mesh(new THREE.CylinderGeometry(tube * 3.6, tube * 4.5, tube * 1.4, 8), darkMat);
+      footing.position.set(sx, tube * 0.65 - 1, cz);
+      this._obstacle(chunk, footing, tube * 3.8, 14, true);
+      const bunker = new THREE.Mesh(new THREE.BoxGeometry(tube * 3.4, tube * 2.3, tube * 3.6), toonMat(0x364252, { map: terrainArmorTex, flat: true }));
+      bunker.position.set(sx, tube * 2.2, cz + tube * 2.1);
+      this._obstacle(chunk, bunker, tube * 2.2, 14, true);
+      const slit = new THREE.Mesh(new THREE.BoxGeometry(tube * 2.4, tube * 0.5, 0.36), toonMat(0x141e2a, { emissive: accent, emissiveIntensity: 1.4, flat: true }));
+      slit.position.set(sx, tube * 2.45, cz + tube * 3.95);
+      slit.userData.noCollide = true;
+      chunk.add(slit);
+      const collar = new THREE.Mesh(new THREE.CylinderGeometry(tube * 2.2, tube * 2.4, tube * 0.7, 8), toonMat(z.rock.top, { flat: true }));
+      collar.position.set(sx, supportH * 0.74, cz);
+      collar.userData.noCollide = true;
+      chunk.add(collar);
     }
-    // small emissive nodes around the ring
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * TAU;
-      const node = new THREE.Mesh(new THREE.OctahedronGeometry(2.2, 0), toonMat(0x223, { emissive: z.rock.glow ?? 0x7fe9ff, emissiveIntensity: 1.3, flat: true }));
-      node.position.set(x + Math.cos(a) * R, ring.position.y + Math.sin(a) * R, cz);
+    // 8 armoured clamp blocks, 4 inward energy projector emitters & sequential pulsing guidance beacons
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU + rotZ;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const px = x + ca * R, py = ringY + sa * R;
+      const clampBlk = new THREE.Mesh(new THREE.BoxGeometry(tube * 2.6, tube * 1.7, tube * 2.8), darkMat);
+      clampBlk.position.set(px, py, cz);
+      clampBlk.rotation.z = a;
+      clampBlk.userData.noCollide = true;
+      chunk.add(clampBlk);
+      if (i % 2 === 0) {
+        // Inward-pointing energy projector emitter pylon on cardinal axes
+        const emitter = new THREE.Mesh(new THREE.ConeGeometry(tube * 0.62, tube * 2.2, 6), toonMat(0x161e2a, { emissive: accent, emissiveIntensity: 1.5, flat: true }));
+        emitter.position.set(x + ca * (R - tube * 1.65), ringY + sa * (R - tube * 1.65), cz);
+        emitter.rotation.z = a + Math.PI / 2;
+        emitter.userData.noCollide = true;
+        chunk.add(emitter);
+      }
+      const node = new THREE.Mesh(new THREE.OctahedronGeometry(2.2, 0), toonMat(0x161a24, { emissive: accent, emissiveIntensity: 1.5, flat: true }));
+      node.position.set(x + ca * (R + tube * 1.35), ringY + sa * (R + tube * 1.35), cz);
+      node.userData.noCollide = true;
       chunk.add(node);
+      this.glows.push({ chunk, mat: node.material, base: 1.5, amp: 0.48, off: a * 1.5 });
     }
   }
 
-  /** choose a zone-appropriate complex prop and drop it off to one side */
+  /** choose a zone-appropriate complex prop and place it well outside the flight corridor */
   _complexProp(chunk, z) {
-    const side = Math.random() < 0.5 ? 1 : -1;
-    const cz = -rand(30, CHUNK_LEN - 30);
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const cz = -rand(45, CHUNK_LEN - 45);
     const route = flightRoute(z.id, chunk.userData.virtualZ + cz);
-    const x = route.center + side * rand(route.halfWidth + (z.id === 'ember' ? 150 : 62), FIELD * 0.82);
-    // Ocean landmarks are fortified lighthouses/relay towers. Ring gates are
-    // reserved for solid-ground zones where their foundations can read clearly.
-    if (z.id === 'sea' || Math.random() < 0.5) this._megaTower(chunk, z, x, cz);
+    const isTower = z.id === 'sea' || Math.random() < 0.55;
+    const offset = isTower ? rand(142, 215) : rand(158, 228);
+    const x = route.center + side * (route.halfWidth + offset);
+    if (isTower) this._megaTower(chunk, z, x, cz);
     else this._ringGate(chunk, z, x, cz);
   }
 
@@ -2137,7 +2689,9 @@ export class Terrain {
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
     const colors = new Float32Array(pos.count * 3);
-    const a = new THREE.Color(cShade), b = new THREE.Color(cLit), m = cMid ? new THREE.Color(cMid) : null;
+    _tc1.set(cShade); _tc2.set(cLit);
+    const hasMid = cMid !== null && cMid !== undefined;
+    if (hasMid) _tc3.set(cMid);
     const vz = chunk.userData.virtualZ;
     const dune = this.zone?.id === 'dune';
     for (let i = 0; i < pos.count; i++) {
@@ -2153,14 +2707,19 @@ export class Terrain {
       h = h * amp * (0.2 + 0.8 * flatten);
       pos.setY(i, h - 1.5);
       const k = clamp(h / amp * 0.5 + 0.5, 0, 1);
-      const c = m ? (k < 0.5 ? a.clone().lerp(m, k * 2) : m.clone().lerp(b, (k - 0.5) * 2)) : a.clone().lerp(b, k);
+      if (hasMid) {
+        if (k < 0.5) _tcOut.copy(_tc1).lerp(_tc3, k * 2);
+        else _tcOut.copy(_tc3).lerp(_tc2, (k - 0.5) * 2);
+      } else {
+        _tcOut.copy(_tc1).lerp(_tc2, k);
+      }
       if (dune) {
         const windBand = 0.92 + (Math.sin(zz * 0.07 + x * 0.018) * 0.5 + 0.5) * 0.08;
         const route = flightRoute('dune', zz);
         const corridor = clamp(1 - Math.abs(x - route.center) / (route.halfWidth * 1.7), 0, 1);
-        c.multiplyScalar(windBand).lerp(a, corridor * 0.12);
+        _tcOut.multiplyScalar(windBand).lerp(_tc1, corridor * 0.12);
       }
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+      colors[i * 3] = _tcOut.r; colors[i * 3 + 1] = _tcOut.g; colors[i * 3 + 2] = _tcOut.b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.computeVertexNormals();
@@ -2194,7 +2753,7 @@ export class Terrain {
         if (o.userData.float) o.position.y = o.userData.float.y0 + Math.sin(this.time * 0.6 + o.userData.float.off) * 3;
       }
     }
-    if (animateAmbient) for (const m of this.waterfallMats) if (m.map) m.map.offset.y += ambientDt * 1.6;
+    if (animateAmbient && _waterfallTex && this.waterfallMats.length) _waterfallTex.offset.y += ambientDt * 1.6;
     if (animateAmbient) for (const fx of this.naturalEffects) {
       const u = this.time * fx.speed + fx.phase;
       const pulse = 0.5 + 0.5 * Math.sin(u);
@@ -2245,6 +2804,11 @@ export class Terrain {
       if (gr.mat?.emissiveIntensity !== undefined) gr.mat.emissiveIntensity = gr.base + Math.sin(this.time * 3 + gr.off) * gr.amp;
       else if (gr.impact && gr.mat) gr.mat.opacity = Math.max(0, gr.base + Math.sin(this.time * 3 + gr.off) * gr.amp);
     }
+    if (animateAmbient && this.rotors.length) {
+      for (const r of this.rotors) {
+        if (r.chunk.visible && r.obj) r.obj.rotation.y += ambientDt * r.speed;
+      }
+    }
     for (const mark of this.impactMarks) {
       if (!mark.visible) continue;
       const u = mark.userData;
@@ -2253,7 +2817,8 @@ export class Terrain {
       const k = u.life / u.maxLife;
       mark.position.z += scrollSpeed * dt;
       mark.scale.setScalar(u.base * (1.08 - k * 0.08));
-      mark.material.opacity = u.op * Math.min(1, k * 2.4) * (0.35 + k * 0.65);
+      const pulse = u.emberPulse ? (0.85 + Math.sin(this.time * 4 + (u.pulseOff ?? 0)) * 0.22) : 1;
+      mark.material.opacity = u.op * Math.min(1, k * 2.4) * (0.35 + k * 0.65) * pulse;
       if (mark.position.z > 95) { mark.visible = false; mark.material.opacity = 0; }
     }
     this._updateWater(dt);

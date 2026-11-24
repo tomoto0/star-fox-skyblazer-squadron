@@ -122,6 +122,7 @@ export class AudioEngine {
   constructor() {
     this.ctx = null;
     this.enabled = true;
+    this.volume = 1.0;
     this._chargeNodes = null;
     this._musicTimer = null;
     this.trackName = null;
@@ -137,7 +138,7 @@ export class AudioEngine {
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC();
     const c = this.ctx;
-    this.master = c.createGain(); this.master.gain.value = 0.55;
+    this.master = c.createGain(); this.master.gain.value = this.enabled ? 0.55 * this.volume : 0;
     this.comp = c.createDynamicsCompressor();
     this.comp.threshold.value = -14; this.comp.ratio.value = 6;
     this.master.connect(this.comp).connect(c.destination);
@@ -158,10 +159,21 @@ export class AudioEngine {
   }
 
   resume() { this.ctx?.state === 'suspended' && this.ctx.resume(); }
-  toggleMute() {
-    this.enabled = !this.enabled;
-    if (this.master) this.master.gain.value = this.enabled ? 0.55 : 0;
+  _syncMaster() {
+    if (this.master) this.master.gain.value = this.enabled ? 0.55 * this.volume : 0;
+  }
+  setMuted(muted) {
+    this.enabled = !muted;
+    this._syncMaster();
     return this.enabled;
+  }
+  setVolume(vol) {
+    this.volume = Math.max(0, Math.min(1, Number.isFinite(vol) ? vol : 1));
+    this._syncMaster();
+    return this.volume;
+  }
+  toggleMute() {
+    return this.setMuted(this.enabled);
   }
 
   /* ---------------- SFX primitives ---------------- */
@@ -443,15 +455,25 @@ export class AudioEngine {
     this._noise(t, 0.4, 0.16, 'bandpass', 3200, 2);
     this._osc('sine', 500, t, 0.35, 0.1, { slideTo: 1400, slideT: 0.35 });
   }
+  deflect() {
+    if (!this.ctx || !this.enabled) return;
+    const t = this.ctx.currentTime;
+    if (t - (this._lastDeflect ?? -99) < 0.045) return;
+    this._lastDeflect = t;
+    this._playSample('shield', 0.11, 1.38);
+    this._osc('triangle', 1240, t, 0.09, 0.13, { slideTo: 2180, slideT: 0.08 });
+    this._osc('sine', 1860, t + 0.02, 0.11, 0.08, { slideTo: 920 });
+  }
   boost(on = true) {
     if (!this.ctx) return; const t = this.ctx.currentTime;
     this._noise(t, 0.5, 0.2, 'lowpass', 2200);
     this._osc('sawtooth', on ? 180 : 320, t, 0.4, 0.12, { slideTo: on ? 420 : 130, lp: 900 });
   }
-  lockBeep() {
+  lockBeep(step = 0) {
     if (!this.ctx) return; const t = this.ctx.currentTime;
-    this._osc('square', 1560, t, 0.07, 0.14);
-    this._osc('square', 2080, t + 0.08, 0.06, 0.12);
+    const mul = 1 + Math.min(3, Math.max(0, step)) * 0.14;
+    this._osc('square', 1560 * mul, t, 0.065, 0.13);
+    this._osc('square', 2080 * mul, t + 0.07, 0.06, 0.11);
   }
   chargeStart() {
     if (!this.ctx || this._chargeNodes) return;

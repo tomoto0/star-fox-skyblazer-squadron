@@ -4,51 +4,50 @@ import { rand, pick, clamp, damp, TAU, _v1, _v2, dotTexture } from '../core/util
 import { PLAYER_Z } from './player.js';
 import { audio } from '../core/audio.js';
 
-const SPAWN_Z = -560;
-// The scripted formations are intentionally scaled by progression, not globally.
-// Early waves teach spacing and evasion; late waves gain density without sudden walls.
-const FORMATION_SCALE = [null, 1.08, 1.10, 1.14, 1.10, 1.10, 1.16, 1.18, 1.18, 1.24, 1.24, 1.30, 1.30, 1.30, 1.30, 1.30, 1.30];
+// Close-quarters combat spawn depth: enemies enter substantial 3D silhouettes
+// immediately and surge into the player's windshield in ~2-3 seconds!
+const SPAWN_Z = -310;
+const FORMATION_SCALE = [null, 1.04, 1.06, 1.10, 1.06, 1.08, 1.12, 1.14, 1.14, 1.18, 1.18, 1.22, 1.24, 1.24, 1.24, 1.24, 1.24];
+const HP_BAR_GEO = new THREE.PlaneGeometry(1, 1);
+HP_BAR_GEO.userData.shared = true;
 
-/* Enemies are slower and easier to line up than before, so HP is raised across
- * the board to keep them a real threat (bosses are tuned separately). */
+/* Enlarged collision radii matching the bigger V57 enemy silhouettes, plus
+ * destruction `tier` ('small' | 'medium' | 'heavy') driving explosion scale,
+ * dying spin-outs, debris burst, and hitstop punch! */
 const STATS = {
-  drone: { hp: 3, r: 2.8, score: 10 },
-  lancer: { hp: 5, r: 3.0, score: 30 },
-  pod: { hp: 11, r: 3.2, score: 50 },
-  turret: { hp: 8, r: 3.6, score: 40 },
-  mine: { hp: 2, r: 2.4, score: 20 },
-  ray: { hp: 5, r: 3.4, score: 30 },
-  // elite random-spawn types
-  gunship: { hp: 26, r: 4.8, score: 140 },
-  seeker: { hp: 8, r: 3.0, score: 60 },
-  sniper: { hp: 10, r: 3.2, score: 80 },
-  strafer: { hp: 8, r: 3.0, score: 70 },
-  bomber: { hp: 18, r: 4.4, score: 120 },
-  saucer: { hp: 12, r: 3.8, score: 110 },
-  // CC0 external-model enemies: mobile relay carrier and its escort drone
-  skyraider: { hp: 42, r: 6.6, score: 360 },
-  relaydrone: { hp: 9, r: 3.6, score: 120 },
-  carrier: { hp: 34, r: 5.8, score: 200 },
-  // ground-deployed types
-  flak: { hp: 14, r: 3.8, score: 90, ground: true },
-  hovertank: { hp: 16, r: 4.0, score: 100, ground: true },
-  launcher: { hp: 12, r: 3.6, score: 90, ground: true },
-  aabattery: { hp: 28, r: 6.1, score: 340, ground: true },    // fixed anti-air interception base
-  /* ---- expansion-pack enemies (bigger models, tankier) ---- */
-  scout: { hp: 7, r: 3.6, score: 90 },                          // air — swooping eye drone
-  fighter: { hp: 14, r: 4.4, score: 160 },                      // air — strafing fighter
-  skytalon: { hp: 11, r: 3.9, score: 190 },                     // air — CC0 aircraft, fast low-altitude interceptor
-  harrier: { hp: 12, r: 3.9, score: 180 },                      // air — fast dive-bomber
-  phantom: { hp: 16, r: 4.1, score: 250 },                      // air — phase interceptor
-  dreadwing: { hp: 58, r: 7.2, score: 980 },                    // air — heavy wing carrier
-  quadtank: { hp: 30, r: 5.2, score: 320, ground: true },       // ground — hover tank
-  trilobite: { hp: 26, r: 5.4, score: 300, ground: true },      // emplaced turret
-  cannon: { hp: 18, r: 4.0, score: 220, ground: true },         // mobile cannon
-  shorecannon: { hp: 16, r: 3.8, score: 210, ground: true },    // shoreline cannon
-  gunboat: { hp: 46, r: 8.5, score: 650, ground: true },        // surface warship
-  frigate: { hp: 70, r: 11.0, score: 1100, ground: true },      // heavy surface frigate
-  mech: { hp: 52, r: 6.4, score: 900, ground: true },           // heavy walker
-  siegecarrier: { hp: 82, r: 10.2, score: 1450 },                // air — Aegis command capital ship
+  drone:       { hp: 3,  r: 5.8,  score: 15,   tier: 'small',  linger: 2.0 },
+  lancer:      { hp: 5,  r: 6.7,  score: 35,   tier: 'medium', linger: 2.3 },
+  pod:         { hp: 11, r: 6.8,  score: 60,   tier: 'medium', linger: 2.6 },
+  turret:      { hp: 8,  r: 6.6,  score: 45,   tier: 'medium', ground: true },
+  mine:        { hp: 2,  r: 5.2,  score: 25,   tier: 'small' },
+  ray:         { hp: 5,  r: 7.0,  score: 35,   tier: 'small',  linger: 2.0 },
+  gunship:     { hp: 26, r: 10.6, score: 160,  tier: 'heavy',  linger: 3.6 },
+  seeker:      { hp: 8,  r: 7.0,  score: 70,   tier: 'medium' },
+  sniper:      { hp: 10, r: 7.2,  score: 90,   tier: 'medium' },
+  strafer:     { hp: 8,  r: 7.4,  score: 80,   tier: 'medium', linger: 2.4 },
+  bomber:      { hp: 18, r: 9.6,  score: 140,  tier: 'heavy',  linger: 3.4 },
+  saucer:      { hp: 12, r: 8.0,  score: 120,  tier: 'medium' },
+  skyraider:   { hp: 42, r: 11.8, score: 380,  tier: 'heavy',  linger: 4.2 },
+  relaydrone:  { hp: 9,  r: 6.6,  score: 120,  tier: 'medium', linger: 2.3 },
+  carrier:     { hp: 34, r: 12.0, score: 240,  tier: 'heavy',  linger: 4.2 },
+  flak:        { hp: 14, r: 7.2,  score: 100,  tier: 'medium', ground: true },
+  hovertank:   { hp: 16, r: 7.8,  score: 110,  tier: 'medium', ground: true },
+  launcher:    { hp: 12, r: 7.0,  score: 100,  tier: 'medium', ground: true },
+  aabattery:   { hp: 28, r: 8.8,  score: 360,  tier: 'heavy',  ground: true },
+  scout:       { hp: 7,  r: 7.2,  score: 95,   tier: 'medium', linger: 2.3 },
+  fighter:     { hp: 14, r: 8.8,  score: 170,  tier: 'medium', linger: 2.7 },
+  skytalon:    { hp: 11, r: 8.2,  score: 200,  tier: 'medium', linger: 2.5 },
+  harrier:     { hp: 12, r: 8.2,  score: 190,  tier: 'medium', linger: 2.4 },
+  phantom:     { hp: 16, r: 8.0,  score: 260,  tier: 'medium', linger: 2.7 },
+  dreadwing:   { hp: 58, r: 12.8, score: 980,  tier: 'heavy',  linger: 4.5 },
+  quadtank:    { hp: 30, r: 8.8,  score: 340,  tier: 'heavy',  ground: true },
+  trilobite:   { hp: 26, r: 9.0,  score: 320,  tier: 'heavy',  ground: true },
+  cannon:      { hp: 18, r: 6.8,  score: 230,  tier: 'medium', ground: true },
+  shorecannon: { hp: 16, r: 6.6,  score: 220,  tier: 'medium', ground: true },
+  gunboat:     { hp: 46, r: 13.5, score: 680,  tier: 'heavy',  ground: true },
+  frigate:     { hp: 70, r: 17.0, score: 1150, tier: 'heavy',  ground: true },
+  mech:        { hp: 52, r: 10.4, score: 920,  tier: 'heavy',  ground: true },
+  siegecarrier:{ hp: 82, r: 14.4, score: 1500, tier: 'heavy',  linger: 4.8 },
 };
 
 const BUILDERS = {
@@ -57,120 +56,177 @@ const BUILDERS = {
   strafer: buildStrafer, bomber: buildBomber, flak: buildFlak, aabattery: buildAABattery, hovertank: buildHovertank, launcher: buildLauncher,
   saucer: buildSaucer, carrier: buildCarrier,
   skyraider: buildCarrier, relaydrone: buildDrone,
-  // expansion types are model-only; these are just load-time fallbacks
   scout: buildDrone, fighter: buildStrafer, skytalon: buildStrafer, harrier: buildLancer, phantom: buildSeeker, dreadwing: buildSiegeCarrier,
   quadtank: buildHovertank, trilobite: buildFlak,
   cannon: buildFlak, shorecannon: buildTurret, gunboat: buildCarrier, frigate: buildCarrier, mech: buildLauncher,
   siegecarrier: buildSiegeCarrier,
 };
-const ELITES = ['seeker', 'sniper', 'gunship'];
-const HEAVY_TYPES = new Set(['skyraider', 'carrier', 'gunship', 'bomber', 'dreadwing', 'frigate', 'gunboat', 'mech', 'quadtank', 'trilobite', 'siegecarrier']);
+
+const HEAVY_TYPES = new Set(['skyraider', 'carrier', 'gunship', 'bomber', 'dreadwing', 'frigate', 'gunboat', 'mech', 'quadtank', 'trilobite', 'siegecarrier', 'aabattery']);
 const ELITE_TYPES = new Set(['seeker', 'sniper', 'strafer', 'fighter', 'skytalon', 'harrier', 'phantom', 'saucer', 'scout', 'relaydrone']);
-// These units use the shared aimed-shot path, so their HUD LOCK state always
-// corresponds to a real projectile target. Barrage-only units stay player-focused.
 const ALLY_TARGET_CAPABLE = new Set([
   'drone', 'relaydrone', 'lancer', 'turret', 'seeker', 'sniper', 'strafer',
   'flak', 'aabattery', 'saucer', 'carrier', 'skyraider', 'scout', 'fighter', 'skytalon', 'harrier',
   'phantom', 'trilobite', 'cannon', 'shorecannon', 'siegecarrier',
 ]);
 
-const MARKER_TEXTURES = new Map();
-function markerTexture(label) {
-  if (MARKER_TEXTURES.has(label)) return MARKER_TEXTURES.get(label);
+/* ---- Crisp Star Fox-style tactical corner brackets (no noisy HOSTILE text boxes!) ---- */
+const BRACKET_CACHE = new Map();
+function bracketTexture(style = 'corner') {
+  if (BRACKET_CACHE.has(style)) return BRACKET_CACHE.get(style);
   const c = document.createElement('canvas');
-  c.width = 256; c.height = 72;
+  c.width = 128; c.height = 128;
   const ctx = c.getContext('2d');
-  ctx.clearRect(0, 0, c.width, c.height);
-  ctx.lineWidth = 5; ctx.strokeStyle = '#ffffff';
-  // clipped sci-fi frame: visually distinct from the round pilot portraits
-  ctx.beginPath();
-  ctx.moveTo(12, 25); ctx.lineTo(12, 12); ctx.lineTo(46, 12);
-  ctx.moveTo(210, 12); ctx.lineTo(244, 12); ctx.lineTo(244, 25);
-  ctx.moveTo(12, 47); ctx.lineTo(12, 60); ctx.lineTo(46, 60);
-  ctx.moveTo(210, 60); ctx.lineTo(244, 60); ctx.lineTo(244, 47);
-  ctx.stroke();
-  ctx.font = '700 29px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#ffffff'; ctx.fillText(label, 128, 37);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-  MARKER_TEXTURES.set(label, t);
+  ctx.clearRect(0, 0, 128, 128);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineCap = 'square';
+  if (style === 'lock') {
+    ctx.lineWidth = 7;
+    const m = 14, len = 28;
+    ctx.beginPath();
+    ctx.moveTo(m, m + len); ctx.lineTo(m, m); ctx.lineTo(m + len, m);
+    ctx.moveTo(128 - m - len, m); ctx.lineTo(128 - m, m); ctx.lineTo(128 - m, m + len);
+    ctx.moveTo(m, 128 - m - len); ctx.lineTo(m, 128 - m); ctx.lineTo(m + len, 128 - m);
+    ctx.moveTo(128 - m - len, 128 - m); ctx.lineTo(128 - m, 128 - m); ctx.lineTo(128 - m, 128 - m - len);
+    ctx.stroke();
+    // subtle diamond ticks inside lock reticle
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(64, 24); ctx.lineTo(64, 36);
+    ctx.moveTo(64, 92); ctx.lineTo(64, 104);
+    ctx.moveTo(24, 64); ctx.lineTo(36, 64);
+    ctx.moveTo(92, 64); ctx.lineTo(104, 64);
+    ctx.stroke();
+  } else if (style === 'heavy') {
+    // Bold octagonal heavy target corners
+    ctx.lineWidth = 6;
+    const m = 18, len = 26;
+    ctx.beginPath();
+    ctx.moveTo(m, m + len); ctx.lineTo(m, m); ctx.lineTo(m + len, m);
+    ctx.moveTo(128 - m - len, m); ctx.lineTo(128 - m, m); ctx.lineTo(128 - m, m + len);
+    ctx.moveTo(m, 128 - m - len); ctx.lineTo(m, 128 - m); ctx.lineTo(m + len, 128 - m);
+    ctx.moveTo(128 - m - len, 128 - m); ctx.lineTo(128 - m, 128 - m); ctx.lineTo(128 - m, 128 - m - len);
+    ctx.stroke();
+  } else {
+    // Sleek minimal tactical target corners (keeps focus on the 3D craft!)
+    ctx.lineWidth = 5;
+    const m = 24, len = 20;
+    ctx.beginPath();
+    ctx.moveTo(m, m + len); ctx.lineTo(m, m); ctx.lineTo(m + len, m);
+    ctx.moveTo(128 - m - len, m); ctx.lineTo(128 - m, m); ctx.lineTo(128 - m, m + len);
+    ctx.moveTo(m, 128 - m - len); ctx.lineTo(m, 128 - m); ctx.lineTo(m + len, 128 - m);
+    ctx.moveTo(128 - m - len, 128 - m); ctx.lineTo(128 - m, 128 - m); ctx.lineTo(128 - m, 128 - m - len);
+    ctx.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  BRACKET_CACHE.set(style, t);
   return t;
 }
 
 function markerProfile(type, ground = false) {
-  if (type === 'mine') return { label: 'MINE', color: 0xff3158, scale: 0.86, y: 7, class: 'mine' };
-  if (type === 'siegecarrier') return { label: 'SIEGE', color: 0xffa34d, scale: 1.56, y: 22, class: 'heavy' };
-  if (HEAVY_TYPES.has(type)) return { label: 'HEAVY', color: 0xffa34d, scale: 1.34, y: 18, class: 'heavy' };
-  if (ELITE_TYPES.has(type)) return { label: 'ELITE', color: 0xce82ff, scale: 1.08, y: 12, class: 'elite' };
-  if (type === 'aabattery') return { label: 'AA BASE', color: 0xff8d46, scale: 1.24, y: 16, class: 'ground' };
-  if (ground) return { label: 'GROUND', color: 0xffc05c, scale: 1.0, y: 10, class: 'ground' };
-  return { label: 'HOSTILE', color: 0xff4e64, scale: 0.92, y: 10, class: 'hostile' };
+  if (type === 'mine') return { style: 'corner', color: 0xff3558, scale: 0.95, class: 'mine' };
+  if (HEAVY_TYPES.has(type)) return { style: 'heavy', color: 0xff9f43, scale: 1.45, class: 'heavy' };
+  if (ELITE_TYPES.has(type)) return { style: 'corner', color: 0xda7eff, scale: 1.15, class: 'elite' };
+  if (ground) return { style: 'corner', color: 0xffc454, scale: 1.05, class: 'ground' };
+  return { style: 'corner', color: 0xff5268, scale: 1.0, class: 'hostile' };
 }
 
 export class Enemies {
   constructor(scene) {
     this.scene = scene;
     this.list = [];
-    this.queue = [];  // delayed spawns
+    this.queue = [];
+    this._pendingShots = [];
     this.killCount = 0;
     this.difficultyWave = 1;
   }
 
-  get aliveCount() { return this.list.length; }
+  /** Pause-safe delayed shot scheduler driven by game dt (never leaks across pause/waveclear) */
+  _scheduleShot(delaySec, fn) {
+    this._pendingShots.push({ t: delaySec, fn });
+  }
+
+  get aliveCount() { return this.list.filter((e) => !e.dying).length; }
 
   setDifficultyWave(wave) { this.difficultyWave = clamp(wave | 0, 1, 16); }
 
   /** immediately spawn one enemy */
   spawn(type, opts = {}) {
     const st = STATS[type];
-    // real CC0 ship model when loaded (elites); procedural builder otherwise
     const mesh = SHIP_MODELS[type] ? SHIP_MODELS[type].clone(true) : BUILDERS[type]();
-    mesh.traverse((o) => o.layers.enable(1));   // lit by the enemy-only fill light
+    mesh.traverse((o) => o.layers.enable(1));
     this.scene.add(mesh);
+
+    const hpVal = (st.hp * (opts.hpMul ?? 1)) | 0 || 1;
     const e = {
-      type, mesh, alive: true,
-      hp: (st.hp * (opts.hpMul ?? 1)) | 0 || 1,
-      maxHp: (st.hp * (opts.hpMul ?? 1)) | 0 || 1,
+      type, mesh, alive: true, dying: false,
+      tier: st.tier ?? 'small',
+      hp: hpVal, maxHp: hpVal,
       radius: st.r, score: st.score,
-      age: 0, fireCd: opts.fireCd ?? (this.difficultyWave <= 3 ? rand(0.55, 1.25) : rand(1.1, 2.4)),
-      x0: opts.x ?? rand(-90, 90), y0: opts.y ?? rand(6, 30),
-      phase: opts.phase ?? rand(TAU), amp: opts.amp ?? rand(4, 14),
-      speed: opts.speed ?? 1, side: opts.side ?? (Math.random() < 0.5 ? -1 : 1),
+      age: 0,
+      fireCd: opts.fireCd ?? (this.difficultyWave <= 3 ? rand(0.6, 1.25) : rand(0.95, 2.0)),
+      x0: opts.x ?? rand(-75, 75),
+      y0: opts.y ?? rand(10, 34),
+      flankOffset: rand(-34, 34),
+      yOffset: rand(-6, 15),
+      phase: opts.phase ?? rand(TAU),
+      amp: opts.amp ?? rand(6, 16),
+      speed: opts.speed ?? 1,
+      side: opts.side ?? (Math.random() < 0.5 ? -1 : 1),
       aggressive: opts.aggressive ?? false,
       ground: !!st.ground,
-      // Enemy fire remains player-focused, but a bounded share of combatants
-      // temporarily tracks a wingmate. A forced target is reserved for the
-      // visible rescue event and never falls back to a silent HP drain.
+      // Close-quarters dogfight linger & acrobatic flight state:
+      // enemies dive right into z ∈ [-102, -34], execute spirals/swoops/evasive jinks, then roar past!
+      lingerDur: st.linger ?? 0,
+      lingerUsed: 0,
+      lingering: false,
+      maneuver: opts.maneuver ?? pick(['corkscrew', 'swoop', 'flank']),
+      evadeT: 0,
+      evadeDir: 1,
+      evadeSpin: 0,
+      dashCd: rand(1.6, 2.6),
+      telegraphFired: false,
+      // Visceral impact / death-spiral state
+      flash: 0,
+      recoil: 0,
+      hitSpin: 0,
+      smokeCd: 0,
+      deathT: 0,
+      deathVel: null,
+      deathSpin: null,
+      baseScale: mesh.userData.meshScale ?? 1,
       allyTarget: opts.allyTarget ?? null,
       forcedWingmate: opts.forcedWingmate ?? null,
       allyTargetT: 0,
-      flash: 0,
       pos() { return this.mesh.position; },
     };
-    // hover craft and surface ships ride above the deck/water line
-    const HOVER = { hovertank: 3, quadtank: 2.5, gunboat: 1.5, frigate: 2 };
+
+    if (e.baseScale !== 1) mesh.scale.setScalar(e.baseScale);
+
+    const HOVER = { hovertank: 3.5, quadtank: 3.0, gunboat: 1.8, frigate: 2.2 };
     if (st.ground) e.y0 = opts.y ?? (HOVER[type] ?? 0);
+    // Keep ground enemies inside the visible canyon/sea flanks so they aren't hidden off-screen
+    if (st.ground && opts.x === undefined) e.x0 = rand(-118, 118);
     mesh.position.set(e.x0, e.y0, opts.z ?? SPAWN_Z);
     if (type === 'turret') mesh.position.y = opts.y ?? 1.2;
-    // Object3D.clone does not preserve reference arrays in userData reliably,
-    // so resolve named visual parts on the cloned hierarchy instead.
+
     const frame = mesh.getObjectByName('combatFrame');
     if (frame) {
       const visual = {
-        engineGlows: [], engineCollars: [], warningLights: [], weaponGlows: [], sensorRings: [],
-        reactorCores: [], reactorHalos: [], heatVanes: [], dataVanes: [], muzzleCages: [], armourPlates: [], damageSmoke: null,
+        engineGlows: [], engineCollars: [], enginePlumes: [],
+        warningLights: [], weaponGlows: [], sensorRings: [],
+        reactorCores: [], reactorHalos: [], damageSmoke: null,
       };
       frame.traverse((n) => {
         if (n.name === 'combatEngineGlow') visual.engineGlows.push(n);
         else if (n.name === 'combatEngineCollar') visual.engineCollars.push(n);
+        else if (n.name === 'combatEnginePlume') visual.enginePlumes.push(n);
         else if (n.name === 'combatWarningLight') visual.warningLights.push(n);
         else if (n.name === 'combatWeaponGlow') visual.weaponGlows.push(n);
         else if (n.name === 'combatSensorRing') visual.sensorRings.push(n);
         else if (n.name === 'combatReactorCore') visual.reactorCores.push(n);
         else if (n.name === 'combatReactorHalo') visual.reactorHalos.push(n);
-        else if (n.name === 'combatHeatVane') visual.heatVanes.push(n);
-        else if (n.name === 'combatDataVane') visual.dataVanes.push(n);
-        else if (n.name === 'combatMuzzleCage') visual.muzzleCages.push(n);
-        else if (n.name === 'combatArmourPlate') visual.armourPlates.push(n);
         else if (n.name === 'combatDamageSmoke') visual.damageSmoke = n;
       });
       e.visual = visual;
@@ -180,62 +236,101 @@ export class Enemies {
     return e;
   }
 
-  /** queue a formation with per-ship stagger, spread across the wide field */
+  /** queue a formation tightly framed across the player's combat corridor */
   formation(type, n, pattern, opts = {}) {
-    const scale = opts.noScale ? 1 : (FORMATION_SCALE[this.difficultyWave] ?? 1.30);
+    const scale = opts.noScale ? 1 : (FORMATION_SCALE[this.difficultyWave] ?? 1.24);
     n = Math.max(1, Math.round(n * scale));
-    // when the wave doesn't pin an x, drop the group at a random lateral anchor
-    // so successive formations sweep left / centre / right across the field
-    const bx = opts.x ?? rand(-215, 215);
-    // occasional high-altitude squadron to use the taller vertical space
-    const highY = opts.y === undefined && Math.random() < 0.34 ? rand(52, 160) : null;
+    const bx = opts.x !== undefined ? clamp(opts.x * 0.72, -110, 110) : rand(-74, 74);
+    const highY = opts.y === undefined && Math.random() < 0.28 ? rand(30, 66) : null;
     for (let i = 0; i < n; i++) {
       const o = { ...opts };
       switch (pattern) {
-        case 'line': o.x = -((n - 1) / 2) * 20 + i * 20 + bx; o.y = opts.y ?? highY ?? 16; o.delay = i * 0.05; break;
-        case 'vee': o.x = (i - (n - 1) / 2) * 18 + bx; o.y = (opts.y ?? highY ?? 22) - Math.abs(i - (n - 1) / 2) * 3.4; o.delay = Math.abs(i - (n - 1) / 2) * 0.1; break;
-        case 'column': o.x = opts.x ?? rand(-215, 215); o.y = opts.y ?? highY ?? rand(8, 80); o.delay = i * 0.42; break;
-        case 'sides': o.side = i % 2 ? 1 : -1; o.x = o.side * rand(200, 290); o.y = opts.y ?? highY ?? rand(10, 90); o.delay = Math.floor(i / 2) * 0.45; break;
-        case 'wall': o.x = -((n - 1) / 2) * (580 / n) + i * (580 / n); o.y = opts.y ?? rand(12, 70); o.delay = i * 0.03; break;
-        // Wing echelon: a clean diagonal read that gives the player a wide flank.
-        case 'echelon': o.x = bx + (i - (n - 1) / 2) * 28; o.y = (opts.y ?? highY ?? 26) + i * 5; o.z = (opts.z ?? SPAWN_Z) - i * 17; o.delay = i * 0.12; break;
-        // Pincer begins outside the central corridor, then individual attack AIs converge.
-        case 'pincer': { const side = i < Math.ceil(n / 2) ? -1 : 1; const rank = i % Math.ceil(n / 2); o.side = side; o.x = side * rand(190, 245) + bx * 0.18; o.y = (opts.y ?? highY ?? 34) + rank * 13; o.z = (opts.z ?? SPAWN_Z) - rank * 24; o.delay = rank * 0.22; break; }
-        default: o.delay = i * 0.22;
+        case 'line':
+          o.x = -((n - 1) / 2) * 18 + i * 18 + bx;
+          o.y = opts.y ?? highY ?? 18;
+          o.delay = i * 0.08;
+          break;
+        case 'vee':
+          o.x = (i - (n - 1) / 2) * 17 + bx;
+          o.y = (opts.y ?? highY ?? 22) - Math.abs(i - (n - 1) / 2) * 2.8;
+          o.delay = Math.abs(i - (n - 1) / 2) * 0.12;
+          break;
+        case 'column':
+          o.x = opts.x !== undefined ? clamp(opts.x, -95, 95) : rand(-78, 78);
+          o.y = opts.y ?? highY ?? rand(12, 46);
+          o.delay = i * 0.36;
+          break;
+        case 'sides':
+          o.side = i % 2 ? 1 : -1;
+          o.x = o.side * rand(85, 138);
+          o.y = opts.y ?? highY ?? rand(14, 52);
+          o.delay = Math.floor(i / 2) * 0.38;
+          break;
+        case 'wall':
+          o.x = -((n - 1) / 2) * (240 / Math.max(1, n)) + i * (240 / Math.max(1, n));
+          o.y = opts.y ?? rand(14, 46);
+          o.delay = i * 0.05;
+          break;
+        case 'echelon':
+          o.x = bx + (i - (n - 1) / 2) * 24;
+          o.y = (opts.y ?? highY ?? 24) + i * 4;
+          o.z = (opts.z ?? SPAWN_Z) - i * 18;
+          o.delay = i * 0.14;
+          break;
+        case 'pincer': {
+          const side = i < Math.ceil(n / 2) ? -1 : 1;
+          const rank = i % Math.ceil(n / 2);
+          o.side = side;
+          o.x = side * rand(96, 136) + bx * 0.18;
+          o.y = (opts.y ?? highY ?? 28) + rank * 9;
+          o.z = (opts.z ?? SPAWN_Z) - rank * 22;
+          o.delay = rank * 0.22;
+          break;
+        }
+        default:
+          o.delay = i * 0.22;
       }
       o.phase = (opts.phase ?? 0) + i * 0.7;
       this.queue.push({ type, opts: o, t: o.delay ?? 0 });
     }
   }
 
-  /** Spawn a readable mixed squadron rather than a dense single-type wall. */
   taskForce(kind, opts = {}, game = null) {
-    const x = opts.x ?? rand(-42, 42);
-    const y = opts.y ?? 64;
+    const x = opts.x !== undefined ? clamp(opts.x * 0.7, -50, 50) : rand(-36, 36);
+    const y = clamp(opts.y ?? 42, 22, 62);
     const z = opts.z ?? SPAWN_Z;
     if (kind === 'siege') {
-      const flagship = this.spawn('siegecarrier', { x, y, z, speed: opts.speed ?? 0.32, hpMul: opts.hpMul ?? 1 });
+      const flagship = this.spawn('siegecarrier', { x, y, z, speed: opts.speed ?? 0.55, hpMul: opts.hpMul ?? 1 });
       this._formationEntryFx(flagship, game, 'siege');
       const escorts = opts.escorts ?? 4;
       for (let i = 0; i < escorts; i++) {
         const side = i % 2 ? 1 : -1;
         this.queue.push({
           type: i % 3 === 2 ? 'phantom' : 'fighter',
-          opts: { x: x + side * (44 + (i >> 1) * 22), y: y + (i % 2 ? 8 : -10), z: z - 30 - i * 12, side, speed: i % 3 === 2 ? 0.88 : 1.02, noScale: true },
-          t: 0.45 + i * 0.24,
+          opts: { x: x + side * (34 + (i >> 1) * 18), y: y + (i % 2 ? 7 : -8), z: z - 24 - i * 12, side, speed: i % 3 === 2 ? 0.92 : 1.04, noScale: true },
+          t: 0.4 + i * 0.22,
         });
       }
       return;
     }
     if (kind === 'pincer') {
       const count = opts.count ?? 3;
-      this.formation('harrier', count, 'pincer', { x, y, z, noScale: true, speed: 1.04, entryFx: 'pincer' });
-      // The support pair stays wide, preserving the central escape lane between pincers.
-      this.formation('fighter', Math.max(2, count - 1), 'sides', { x, y: y + 14, z: z - 32, noScale: true, speed: 0.86, entryFx: 'pincer' });
+      this.formation('harrier', count, 'pincer', { x, y, z, noScale: true, speed: 1.06, entryFx: 'pincer' });
+      this.formation('fighter', Math.max(2, count - 1), 'sides', { x, y: y + 10, z: z - 28, noScale: true, speed: 0.90, entryFx: 'pincer' });
     }
   }
 
   update(dt, scroll, player, proj, game) {
+    // pause-safe delayed burst shots
+    for (let i = this._pendingShots.length - 1; i >= 0; i--) {
+      const s = this._pendingShots[i];
+      s.t -= dt;
+      if (s.t <= 0) {
+        this._pendingShots.splice(i, 1);
+        s.fn();
+      }
+    }
+
     // delayed spawns
     for (let i = this.queue.length - 1; i >= 0; i--) {
       const q = this.queue[i];
@@ -247,41 +342,39 @@ export class Enemies {
       }
     }
 
-    // random elite / ground spawns during regular (non-boss) waves — ramps with wave #
-    this.eliteTimer = (this.eliteTimer ?? 8) - dt;
-    if (this.eliteTimer <= 0 && game.state === 'playing' && !game.boss && !game.rival?.active && !game.waveSpec?.boss && (game.wave ?? 1) >= 3) {
+    // random elite / ground spawns
+    this.eliteTimer = (this.eliteTimer ?? 7) - dt;
+    if (this.eliteTimer <= 0 && game.state === 'playing' && !game.boss && !game.rival?.active && !game.waveSpec?.boss && (game.wave ?? 1) >= 2) {
       const w = game.wave ?? 1;
-      this.eliteTimer = Math.max(4.6, rand(10, 15) - Math.max(0, w - 3) * 0.28);
+      this.eliteTimer = Math.max(4.4, rand(9, 13.5) - Math.max(0, w - 2) * 0.28);
       const overWater = game.zone?.id === 'sea';
       const roll = Math.random();
-      if (overWater && roll < 0.45) {
-        // surface task force — warships only where there is water to float on
+      if (overWater && roll < 0.40) {
         const pool = ['shorecannon'];
-        if (w >= 6) pool.push('gunboat');
-        if (w >= 9) pool.push('gunboat', 'frigate');
+        if (w >= 4) pool.push('gunboat');
+        if (w >= 7) pool.push('gunboat', 'frigate');
         const t = pick(pool);
-        this.spawn(t, { x: rand(-200, 200), z: SPAWN_Z, speed: 1.0 });
+        this.spawn(t, { x: rand(-105, 105), z: SPAWN_Z, speed: 1.0 });
         game.hud?.alert?.(t === 'frigate' ? '⚠ FRIGATE ON THE WATER' : '⚠ SURFACE CONTACT', 1.5);
-      } else if (!overWater && roll < 0.42) {
-        // ground column — heavier hardware unlocks as the run goes on
+      } else if (!overWater && roll < 0.38) {
         const pool = ['flak', 'hovertank', 'launcher', 'cannon'];
         if (w >= 4) pool.push('aabattery');
         if (w >= 5) pool.push('quadtank', 'trilobite');
         if (w >= 8) pool.push('mech');
         const t = pick(pool);
         const n = (t === 'hovertank' || t === 'cannon') && Math.random() < 0.5 ? 2 : 1;
-        for (let k = 0; k < n; k++) this.spawn(t, { x: rand(-170, 170) + k * 30, z: SPAWN_Z, speed: 1.0 });
+        for (let k = 0; k < n; k++) this.spawn(t, { x: rand(-95, 95) + k * 28, z: SPAWN_Z, speed: 1.0 });
         game.hud?.alert?.(t === 'mech' ? '⚠ HEAVY WALKER' : t === 'aabattery' ? '⚠ AA BATTERY LOCKING' : '⚠ GROUND FORCES', 1.4);
       } else {
-        // air wing — tougher elites become more likely deeper in the run
         const r = Math.random() + Math.min(w, 16) * 0.015;
         const type = w >= 15 && r > 1.16 ? 'dreadwing' : w >= 13 && r > 1.06 ? 'phantom'
-          : r > 1.10 ? 'skyraider' : r > 1.00 ? 'carrier' : r > 0.88 ? 'gunship' : r > 0.74 ? 'bomber'
-          : w >= 13 && r > 0.66 ? 'harrier' : r > 0.62 ? 'fighter' : w >= 7 && r > 0.54 ? 'skytalon' : r > 0.50 ? 'saucer' : r > 0.38 ? 'sniper'
-          : r > 0.25 ? 'strafer' : r > 0.13 ? 'scout' : 'seeker';
-        const speed = type === 'dreadwing' ? 0.30 : type === 'skyraider' ? 0.38 : type === 'carrier' ? 0.32 : type === 'gunship' ? 0.5 : type === 'bomber' ? 0.42
-          : type === 'phantom' ? 0.88 : type === 'harrier' ? 1.08 : type === 'skytalon' ? 1.16 : type === 'sniper' ? 0.38 : type === 'scout' ? 0.7 : type === 'fighter' ? 0.8 : 1.0;
-        this.spawn(type, { x: rand(-150, 150), y: (type === 'carrier' || type === 'skyraider' || type === 'dreadwing') ? rand(48, 104) : rand(16, 80), z: SPAWN_Z, speed });
+          : r > 1.08 ? 'skyraider' : r > 0.98 ? 'carrier' : r > 0.86 ? 'gunship' : r > 0.72 ? 'bomber'
+          : w >= 13 && r > 0.64 ? 'harrier' : r > 0.60 ? 'fighter' : w >= 6 && r > 0.52 ? 'skytalon' : r > 0.48 ? 'saucer' : r > 0.36 ? 'sniper'
+          : r > 0.24 ? 'strafer' : r > 0.12 ? 'scout' : 'seeker';
+        const speed = type === 'dreadwing' ? 0.52 : type === 'skyraider' ? 0.58 : type === 'carrier' ? 0.55 : type === 'gunship' ? 0.68 : type === 'bomber' ? 0.62
+          : type === 'phantom' ? 0.92 : type === 'harrier' ? 1.08 : type === 'skytalon' ? 1.12 : type === 'sniper' ? 0.58 : type === 'scout' ? 0.82 : type === 'fighter' ? 0.90 : 1.0;
+        const spawnY = (type === 'carrier' || type === 'skyraider' || type === 'dreadwing') ? rand(30, 56) : rand(14, 48);
+        this.spawn(type, { x: clamp(player.x * 0.4 + rand(-80, 80), -115, 115), y: spawnY, z: SPAWN_Z, speed });
         game.hud?.alert?.(type === 'dreadwing' ? '⚠ DREADWING CARRIER INBOUND' : type === 'phantom' ? '⚠ PHASE CONTACT' : type === 'skytalon' ? '⚠ SKY TALON INBOUND' : type === 'skyraider' ? '⚠ RELAY CARRIER INBOUND' : type === 'carrier' ? '⚠ CARRIER ON APPROACH' : '⚠ ELITE INBOUND', 1.4);
       }
     }
@@ -293,102 +386,198 @@ export class Enemies {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const e = this.list[i];
       e.age += dt;
+      const p = e.mesh.position;
+
+      /* ---- Flaming death spin-out before final catastrophic explosion! ---- */
+      if (e.dying) {
+        e.deathT -= dt;
+        p.addScaledVector(e.deathVel, dt);
+        e.deathVel.y -= 26 * dt;
+        e.mesh.rotation.x += e.deathSpin.x * dt;
+        e.mesh.rotation.y += e.deathSpin.y * dt;
+        e.mesh.rotation.z += e.deathSpin.z * dt;
+        e.smokeCd -= dt;
+        if (e.smokeCd <= 0 && game?.particles) {
+          e.smokeCd = 0.045;
+          game.particles.fireball(p.x, p.y, p.z, e.tier === 'heavy' ? 1.15 : 0.72, 0xffaa44);
+          game.particles.smoke(p.x, p.y, p.z, e.tier === 'heavy' ? 1.1 : 0.7, 0x2b201e);
+        }
+        if (e.deathT <= 0 || p.y < 1.5 || p.z > 24) {
+          game?.finalizeEnemyDeath?.(e);
+          this.remove(e);
+        }
+        continue;
+      }
+
       this._updateCombatVisual(e, dt);
       this._assignAllyTarget(e, player, wingmates, dt);
-      const p = e.mesh.position;
-      // seeker / sniper / saucer drive their own z via waypoints; others scroll
-      // forward (turrets & ground units ride the terrain — no extra closing speed)
-      if (e.type !== 'seeker' && e.type !== 'sniper' && e.type !== 'saucer') {
-        p.z += scroll * dt * e.speed + (e.type === 'turret' || e.ground ? 0 : 4 * dt);
+
+      // ---- Close-quarters dogfight pacing & aggressive sweet-spot linger ----
+      // Standard fighters surge briskly from SPAWN_Z (-310) straight into close
+      // combat (z ∈ [-102, -34]), weave aggressively across your windshield,
+      // then hit afterburners to scream dramatically past the cockpit!
+      let zRate = 1.0;
+      const selfZ = e.type === 'seeker' || e.type === 'sniper' || e.type === 'saucer';
+      if (!selfZ && !e.ground && e.lingerDur > 0) {
+        const sweetNear = e.tier === 'heavy' ? -56 : -34;
+        const sweetFar = e.tier === 'heavy' ? -122 : -102;
+        if (p.z < sweetFar) {
+          // Surge rapidly into dramatic close-range engagement!
+          zRate = 1.54;
+        } else if (p.z <= sweetNear && e.lingerUsed < e.lingerDur) {
+          e.lingering = true;
+          e.lingerUsed += dt;
+          // Subtle Z-breathing oscillation during dogfight linger makes fighters feel alive!
+          const zWave = e.tier === 'heavy' ? 0 : Math.sin(e.age * 3.8 + e.phase) * 0.24;
+          zRate = (e.tier === 'heavy' ? 0.14 : 0.20) + zWave;
+        } else {
+          e.lingering = false;
+          // Roaring close-range flyby past the player!
+          zRate = e.tier === 'heavy' ? 0.88 : 1.62;
+        }
+      }
+
+      if (!selfZ) {
+        p.z += scroll * dt * e.speed * zRate + (e.type === 'turret' || e.ground ? 0 : 7 * dt * zRate);
+      }
+
+      // Actively converge airborne fighters into the player's close forward sightline
+      if (!e.ground && !selfZ && p.z < -36) {
+        const wantX = clamp(player.x + e.flankOffset, -120, 120);
+        const wantY = clamp(player.y + e.yOffset, 10, 74);
+        e.x0 = damp(e.x0, wantX, e.lingering ? 0.88 : 0.58, dt);
+        e.y0 = damp(e.y0, wantY, e.lingering ? 0.65 : 0.44, dt);
+      }
+
+      // Crisp muzzle-charge telegraph glint right before close-range weapons fire
+      if (e.fireCd > 0 && e.fireCd < 0.28 && !e.telegraphFired && p.z > -220 && p.z < -34) {
+        e.telegraphFired = true;
+        if (game?.particles?.weaponTelegraph && (e.tier !== 'small' || e.type === 'drone')) {
+          const tCol = e.type === 'phantom' ? 0xc088ff : e.type === 'sniper' || e.type === 'lancer' ? 0x72e0ff : 0xff9248;
+          game.particles.weaponTelegraph(p.x, p.y, p.z + (e.ground ? 0 : 2.5), tCol, e.tier === 'heavy' ? 1.35 : 0.9);
+        }
+      } else if (e.fireCd > 0.36) {
+        e.telegraphFired = false;
+      }
+
+      // Damaged enemies trail burning embers and dark smoke so every hit feels tangible!
+      const hpRatio = e.hp / Math.max(1, e.maxHp);
+      if (hpRatio <= 0.55 && e.maxHp > 2 && game?.particles) {
+        e.smokeCd -= dt;
+        if (e.smokeCd <= 0) {
+          e.smokeCd = hpRatio <= 0.28 ? 0.08 : 0.16;
+          game.particles.smoke(p.x + rand(-1.2, 1.2), p.y + rand(-0.6, 1.0), p.z + 2, e.tier === 'heavy' ? 0.85 : 0.5, 0x382a26);
+          if (hpRatio <= 0.35) {
+            game.particles.emit(p.x, p.y, p.z + 1.5, { count: 3, speed: 12, color: 0xffb84d, color2: 0xff4420, life: 0.28, size: 2.2, drag: 2.0 });
+          }
+        }
       }
 
       switch (e.type) {
         case 'drone': {
-          p.x = e.x0 + Math.sin(e.age * 1.7 + e.phase) * e.amp;
-          p.y = e.y0 + Math.sin(e.age * 1.1 + e.phase * 2) * e.amp * 0.4;
-          e.mesh.rotation.z = Math.cos(e.age * 1.7 + e.phase) * 0.5;
+          // 3 complex acrobatic patterns: helical corkscrew spiral, high-to-low dive-swoop, or cross-nose flank weave
+          const closeK = clamp((p.z + 180) / 140, 0, 1);
+          const prevX = p.x, prevY = p.y;
+          if (e.maneuver === 'corkscrew') {
+            const rad = (e.amp + 7) * (0.72 + closeK * 0.45);
+            const ang = e.age * 2.9 + e.phase;
+            p.x = e.x0 + Math.cos(ang) * rad;
+            p.y = clamp(e.y0 + Math.sin(ang) * rad * 0.55, 8, 78);
+            e.mesh.rotation.z = -Math.sin(ang) * 0.95;
+          } else if (e.maneuver === 'swoop') {
+            const u = e.age * 2.15 + e.phase;
+            p.x = e.x0 + Math.sin(u) * (e.amp + 16) + Math.sin(u * 2.1) * 5;
+            p.y = clamp(e.y0 + Math.cos(u * 1.4) * 11 - closeK * 5, 8, 78);
+            e.mesh.rotation.z = clamp((prevX - p.x) * 0.18, -1.05, 1.05);
+          } else {
+            const cut = Math.sin(e.age * 2.4 + e.phase);
+            p.x = e.x0 + cut * (e.amp + 18) + e.side * (1 - closeK) * 28;
+            p.y = clamp(e.y0 + Math.sin(e.age * 3.1 + e.phase) * 7.5, 8, 78);
+            e.mesh.rotation.z = clamp((prevX - p.x) * 0.20, -1.1, 1.1);
+          }
+          e.mesh.rotation.x = clamp((p.y - prevY) * 0.08, -0.45, 0.45);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -460 && p.z < -70) {
-            e.fireCd = earlyBarrage ? rand(0.82, 1.34) : rand(1.35, 2.45);
+          if (e.fireCd <= 0 && p.z > -250 && p.z < -28) {
+            e.fireCd = earlyBarrage ? rand(0.95, 1.48) : rand(1.25, 2.05);
             this._aimedShot(e, player, proj, 'orb');
-            if ((earlyBarrage && Math.random() < 0.38) || (this.difficultyWave >= 6 && Math.random() < 0.28)) {
-              setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'orb', earlyBarrage ? 0.84 : 1), earlyBarrage ? 125 : 150);
+            if ((earlyBarrage && Math.random() < 0.34) || (this.difficultyWave >= 6 && Math.random() < 0.32)) {
+              this._scheduleShot(earlyBarrage ? 0.135 : 0.15, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'orb', earlyBarrage ? 0.85 : 1.05));
             }
           }
           break;
         }
         case 'relaydrone': {
-          // compact escort drone: orbiting attack run with rapid plasma bursts
-          p.x = e.x0 + Math.sin(e.age * 2.1 + e.phase) * (e.amp + 8);
-          p.y = e.y0 + Math.cos(e.age * 1.6 + e.phase) * 4;
-          e.mesh.rotation.y += dt * 1.8;
-          e.mesh.rotation.z = Math.sin(e.age * 2.1 + e.phase) * 0.35;
+          const closeK = clamp((p.z + 180) / 145, 0, 1);
+          const ang = e.age * 2.5 + e.phase;
+          p.x = e.x0 + Math.sin(ang) * (e.amp + 13) * (1 - closeK * 0.18);
+          p.y = clamp(e.y0 + Math.sin(ang * 2) * 7.5, 9, 76);
+          e.mesh.rotation.y += dt * 2.2;
+          e.mesh.rotation.z = Math.cos(ang) * 0.52;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -440 && p.z < -50) {
-            e.fireCd = rand(1.35, 2.15);
+          if (e.fireCd <= 0 && p.z > -250 && p.z < -28) {
+            e.fireCd = rand(1.3, 1.95);
             this._aimedShot(e, player, proj, 'plasma');
-            if (this.difficultyWave >= 8 && Math.random() < 0.25) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'plasma'), 140);
+            if (this.difficultyWave >= 7 && Math.random() < 0.32) this._scheduleShot(0.14, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'plasma'));
           }
           break;
         }
         case 'lancer': {
-          // strafe in from the side, then dash past
-          const enter = clamp(e.age * 0.45, 0, 1);
-          p.x = e.side * 250 * (1 - enter) + e.x0 * enter + Math.sin(e.age * 2.2) * 4;
-          p.y = e.y0 + Math.sin(e.age * 1.4 + e.phase) * 3;
-          p.z += 10 * dt;
-          e.mesh.rotation.z = -e.side * (1 - enter) * 0.8;
+          // Aggressive wing-over swoop cutting diagonally across the player's nose at close range!
+          const enter = clamp(e.age * 0.85, 0, 1);
+          const prevX = p.x;
+          const cross = Math.sin(e.age * 2.7 + e.phase) * (e.lingering ? 24 : 11);
+          p.x = e.side * 126 * (1 - enter) + e.x0 * enter + cross;
+          p.y = clamp(e.y0 + Math.cos(e.age * 2.2 + e.phase) * 8.5, 9, 76);
           e.mesh.lookAt(this._targetPosition(e, player, _v1));
+          e.mesh.rotation.z = clamp(-e.side * (1 - enter) * 0.95 + (prevX - p.x) * 0.14, -1.15, 1.15);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -420 && p.z < -50) {
-            e.fireCd = earlyBarrage ? rand(1.20, 1.85) : rand(1.8, 2.9);
-            // A short, legible tracer burst; the early game now establishes a clear crossfire rhythm.
-            const shots = earlyBarrage ? 3 : this.difficultyWave >= 8 ? 3 : 2;
-            for (let k = 0; k < shots; k++) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'bolt', earlyBarrage ? 1.05 : 1.3), k * 120);
+          if (e.fireCd <= 0 && p.z > -245 && p.z < -28) {
+            e.fireCd = earlyBarrage ? rand(1.2, 1.85) : rand(1.55, 2.4);
+            const shots = earlyBarrage ? 2 : this.difficultyWave >= 8 ? 3 : 2;
+            for (let k = 0; k < shots; k++) {
+              if (k === 0) this._aimedShot(e, player, proj, 'bolt', earlyBarrage ? 1.0 : 1.25);
+              else this._scheduleShot(k * 0.12, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'bolt', earlyBarrage ? 1.0 : 1.25));
+            }
           }
           break;
         }
         case 'pod': {
-          p.x = e.x0 + Math.sin(e.age * 0.7 + e.phase) * 5;
-          p.y = e.y0 + Math.sin(e.age * 0.9) * 2.5;
-          e.mesh.rotation.y += dt * 1.5;
+          p.x = e.x0 + Math.sin(e.age * 1.05 + e.phase) * 10;
+          p.y = clamp(e.y0 + Math.cos(e.age * 1.35 + e.phase) * 5.0, 10, 74);
+          e.mesh.rotation.y += dt * 1.85;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -400 && p.z < -50) {
-            e.fireCd = earlyBarrage ? 1.82 : 2.35;
-            const spin = e.age * 0.6;
-            const spokes = earlyBarrage ? 10 : this.difficultyWave >= 7 ? 9 : 8;
+          if (e.fireCd <= 0 && p.z > -245 && p.z < -34) {
+            e.fireCd = earlyBarrage ? 1.95 : 2.3;
+            const spin = e.age * 0.65;
+            const spokes = earlyBarrage ? 8 : this.difficultyWave >= 7 ? 9 : 8;
             for (let k = 0; k < spokes; k++) {
               const a = (k / spokes) * TAU + spin;
-              _v1.set(Math.cos(a) * 38, Math.sin(a) * 38, 30);
-              proj.fireEnemy(p, _v1.clone(), 'plasma');
+              _v1.set(Math.cos(a) * 36, Math.sin(a) * 36, 36);
+              proj.fireEnemy(p, _v1, 'plasma');
             }
-            // Homing pressure arrives after the player has seen the readable ring pattern.
             if (this.difficultyWave >= 4) this._aimedShot(e, player, proj, 'homing');
           }
           break;
         }
         case 'turret': {
-          const head = e.mesh.children[1];
           _v1.set(player.x, player.y, PLAYER_Z).sub(p);
           e.mesh.rotation.y = Math.atan2(_v1.x, _v1.z) + Math.PI;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -460 && p.z < -50) {
-            e.fireCd = earlyBarrage ? rand(1.25, 2.0) : rand(1.7, 2.7);
-            // Early turrets establish readable two-shell pressure; later waves retain their existing delayed partner.
-            this._aimedShot(e, player, proj, 'heavy', earlyBarrage ? 1.18 : 1.45);
-            if (earlyBarrage || this.difficultyWave >= 6) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'heavy', earlyBarrage ? 1.08 : 1.6), earlyBarrage ? 210 : 170);
+          if (e.fireCd <= 0 && p.z > -270 && p.z < -34) {
+            e.fireCd = earlyBarrage ? rand(1.35, 2.05) : rand(1.65, 2.5);
+            this._aimedShot(e, player, proj, 'heavy', earlyBarrage ? 1.12 : 1.38);
+            if (earlyBarrage || this.difficultyWave >= 6) this._scheduleShot(earlyBarrage ? 0.22 : 0.175, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'heavy', earlyBarrage ? 1.05 : 1.45));
           }
           break;
         }
         case 'mine': {
-          _v1.set(player.x, player.y, PLAYER_Z).sub(p).normalize().multiplyScalar(7);
+          _v1.set(player.x, player.y, PLAYER_Z).sub(p).normalize().multiplyScalar(9);
           p.x += _v1.x * dt; p.y += _v1.y * dt;
-          e.mesh.rotation.x += dt * 2; e.mesh.rotation.y += dt * 1.3;
-          const pulse = 1 + Math.sin(e.age * 8) * 0.1;
+          e.mesh.rotation.x += dt * 2.1; e.mesh.rotation.y += dt * 1.4;
+          const pulse = (1 + Math.sin(e.age * 8) * 0.1) * e.baseScale;
           e.mesh.scale.setScalar(pulse);
-          // proximity detonation
           _v2.set(player.x, player.y, PLAYER_Z);
-          if (p.distanceTo(_v2) < 7 && player.invuln <= 0 && !player.rolling) {
+          if (p.distanceTo(_v2) < 8.5 && player.invuln <= 0 && !player.rolling) {
             game.explodeAt(p, false);
             game.damagePlayer(12, 'mine');
             this.kill(e, false);
@@ -397,138 +586,149 @@ export class Enemies {
           break;
         }
         case 'ray': {
-          p.x = e.x0 + Math.sin(e.age * 1.1 + e.phase) * (e.amp + 16);
-          p.y = e.y0 + Math.cos(e.age * 1.6 + e.phase) * 6;
-          e.mesh.rotation.z = Math.cos(e.age * 1.1 + e.phase) * 0.7;
-          if (e.mesh.userData.body) e.mesh.userData.body.rotation.x = Math.sin(e.age * 6) * 0.2;
+          // Graceful Lissajous figure-8 manta swoop diving boldly close across the nose!
+          const u = e.age * 1.75 + e.phase;
+          const prevX = p.x;
+          p.x = e.x0 + Math.sin(u) * (e.amp + 22);
+          p.y = clamp(e.y0 + Math.sin(u * 2.0) * 10.5, 9, 76);
+          e.mesh.rotation.z = clamp((prevX - p.x) * 0.16, -1.05, 1.05);
+          if (e.mesh.userData.body) e.mesh.userData.body.rotation.x = Math.sin(e.age * 7) * 0.26;
+          e.fireCd -= dt;
+          if (e.fireCd <= 0 && p.z > -185 && p.z < -34) {
+            e.fireCd = rand(1.9, 2.8);
+            this._aimedShot(e, player, proj, 'plasma', 0.9);
+          }
           break;
         }
-        /* ---- elite random-spawn enemies: independent waypoint AIs ---- */
         case 'gunship': {
-          // heavy cruiser: repositions to BROADSIDE the player, then rakes it
-          // with cannon fire from its flanks. Slow, deliberate, menacing.
           if (!e.wp) { e.wp = new THREE.Vector3(); e.wpT = 0; }
           e.wpT -= dt;
           if (e.wpT <= 0) {
-            e.wpT = rand(2.2, 3.4);
-            e.wp.set(player.x + (Math.random() < 0.5 ? 1 : -1) * rand(55, 100), clamp(player.y + rand(-14, 18), 12, 120), clamp(p.z, -300, -60));
+            e.wpT = rand(2.0, 3.0);
+            e.wp.set(clamp(player.x + (Math.random() < 0.5 ? 1 : -1) * rand(32, 66), -125, 125), clamp(player.y + rand(-10, 14), 14, 72), clamp(p.z, -145, -60));
           }
-          p.x = damp(p.x, e.wp.x, 1.0, dt);
-          p.y = damp(p.y, e.wp.y, 1.0, dt);
-          e.mesh.rotation.z = damp(e.mesh.rotation.z, (e.wp.x - p.x) * 0.01, 4, dt);
+          p.x = damp(p.x, e.wp.x, 1.15, dt);
+          p.y = damp(p.y, e.wp.y, 1.15, dt);
+          e.mesh.rotation.z = damp(e.mesh.rotation.z, (e.wp.x - p.x) * 0.012, 4, dt);
           e.mesh.lookAt(this._targetPosition(e, player, _v1));
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -460 && p.z < -30) {
-            e.fireCd = rand(1.4, 2.1);
-            for (const s of [1, -1]) {              // twin heavy cannons
-              _v2.copy(p); _v2.x += s * 3.4;
+          if (e.fireCd <= 0 && p.z > -270 && p.z < -30) {
+            e.fireCd = rand(1.45, 2.15);
+            for (const s of [1, -1]) {
+              _v2.copy(p); _v2.x += s * 4.8;
               _v1.set(player.x, player.y, PLAYER_Z).sub(_v2);
               proj.fireEnemy(_v2.clone(), _v1.clone(), 'heavy');
             }
-            if (this.difficultyWave >= 7 && Math.random() < 0.35) { // late-game venom spread
-              for (let k = -1; k <= 1; k++) { _v1.set(player.x + k * 24, player.y, PLAYER_Z).sub(p); proj.fireEnemy(p, _v1.clone(), 'venom'); }
+            if (this.difficultyWave >= 7 && Math.random() < 0.35) {
+              for (let k = -1; k <= 1; k++) { _v1.set(player.x + k * 22, player.y, PLAYER_Z).sub(p); proj.fireEnemy(p, _v1.clone(), 'venom'); }
             }
           }
           break;
         }
         case 'seeker': {
-          // fast interceptor: dives at the player, overshoots, then loops back
-          // out to re-engage. Aggressive attack runs, homing shots on approach.
+          // Aggressive close-range interceptor: dives right up to your nose, then loops!
           if (!e.wp) { e.wp = new THREE.Vector3(); e.aiState = 'dive'; e.wpT = 0; }
           e.wpT -= dt;
           if (e.wpT <= 0) {
-            if (e.aiState === 'dive') { e.aiState = 'loop'; e.wpT = rand(1.0, 1.6);
-              e.wp.set(clamp(player.x + rand(-120, 120), -240, 240), rand(60, 130), rand(-330, -220)); }   // peel away high & far
-            else { e.aiState = 'dive'; e.wpT = rand(1.2, 1.8);
-              e.wp.set(player.x + rand(-18, 18), player.y + rand(-8, 14), PLAYER_Z + rand(12, 30)); }        // screaming dive toward the player
+            if (e.aiState === 'dive') {
+              e.aiState = 'loop'; e.wpT = rand(0.95, 1.5);
+              e.wp.set(clamp(player.x + rand(-85, 85), -145, 145), rand(28, 72), rand(-155, -108));
+            } else {
+              e.aiState = 'dive'; e.wpT = rand(1.15, 1.75);
+              e.wp.set(player.x + rand(-18, 18), player.y + rand(-7, 12), PLAYER_Z - rand(16, 32));
+            }
           }
-          const acc = e.aiState === 'dive' ? 1.15 : 0.95;
+          const acc = e.aiState === 'dive' ? 1.45 : 1.15;
           p.x = damp(p.x, e.wp.x, acc, dt);
           p.y = damp(p.y, e.wp.y, acc, dt);
-          p.z = damp(p.z, e.wp.z, acc * 0.9, dt);
+          p.z = damp(p.z, e.wp.z, acc * 1.1, dt);
           e.mesh.lookAt(_v1.copy(e.wp));
-          e.mesh.rotation.z += Math.sin(e.age * 9) * 0.04;
+          e.mesh.rotation.z += Math.sin(e.age * 9) * 0.05;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && e.aiState === 'dive' && p.z < -30) {
-            e.fireCd = rand(1.3, 2.0);
+          if (e.fireCd <= 0 && e.aiState === 'dive' && p.z > -240 && p.z < -30) {
+            e.fireCd = rand(1.35, 2.0);
             this._aimedShot(e, player, proj, 'homing');
           }
           break;
         }
         case 'sniper': {
-          // marksman: holds at long range and snipes fast bolts; if the player
-          // closes in it slides away to keep its distance. Rarely advances.
+          // Close-mid marksman: holds clearly visible at z ∈ [-175, -90] so you can duel it!
           if (!e.wp) { e.wp = new THREE.Vector3(p.x, p.y, p.z); e.wpT = 0; }
-          const tooClose = p.z > PLAYER_Z - 120;
+          const tooClose = p.z > PLAYER_Z - 64;
           e.wpT -= dt;
           if (e.wpT <= 0 || tooClose) {
-            e.wpT = rand(2.0, 3.2);
-            const flee = tooClose ? rand(-120, -60) : rand(-40, 20);
-            e.wp.set(clamp(player.x + rand(-90, 90), -250, 250), clamp(player.y + rand(-20, 30), 12, 130), clamp(p.z + flee, -420, PLAYER_Z - 110));
+            e.wpT = rand(1.8, 2.8);
+            const targetZ = tooClose ? rand(-155, -110) : rand(-168, -92);
+            e.wp.set(clamp(player.x + rand(-72, 72), -140, 140), clamp(player.y + rand(-14, 24), 14, 72), targetZ);
           }
-          p.x = damp(p.x, e.wp.x, tooClose ? 3.0 : 1.3, dt);
-          p.y = damp(p.y, e.wp.y, tooClose ? 3.0 : 1.3, dt);
-          p.z = damp(p.z, e.wp.z, tooClose ? 3.2 : 1.0, dt);
-          if (e.mesh.userData.ring) e.mesh.userData.ring.rotation.z += dt * 1.6;
+          p.x = damp(p.x, e.wp.x, tooClose ? 3.0 : 1.5, dt);
+          p.y = damp(p.y, e.wp.y, tooClose ? 3.0 : 1.5, dt);
+          p.z = damp(p.z, e.wp.z, tooClose ? 3.2 : 1.45, dt);
+          if (e.mesh.userData.ring) e.mesh.userData.ring.rotation.z += dt * 1.8;
           e.mesh.lookAt(this._targetPosition(e, player, _v1));
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -520 && p.z < -50 && !tooClose) {
-            e.fireCd = rand(1.8, 2.7);
+          if (e.fireCd <= 0 && p.z > -250 && p.z < -42 && !tooClose) {
+            e.fireCd = rand(1.75, 2.6);
             const shots = this.difficultyWave >= 8 ? 3 : 2;
-            for (let k = 0; k < shots; k++) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'bolt', 1.1), k * 120);
+            for (let k = 0; k < shots; k++) {
+              if (k === 0) this._aimedShot(e, player, proj, 'bolt', 1.05);
+              else this._scheduleShot(k * 0.125, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'bolt', 1.05));
+            }
           }
           break;
         }
-        /* ---- STRAFER: hard-banking assault fighter that crosses the field ---- */
         case 'strafer': {
           if (!e.wp) { e.wp = new THREE.Vector3(); e.wpT = 0; }
           e.wpT -= dt;
           if (e.wpT <= 0) {
-            e.wpT = rand(0.9, 1.6);
-            e.wp.set(clamp(player.x + rand(-150, 150), -250, 250), clamp(player.y + rand(-24, 46), 10, 155), p.z);
+            e.wpT = rand(0.9, 1.5);
+            e.wp.set(clamp(player.x + rand(-95, 95), -145, 145), clamp(player.y + rand(-16, 30), 12, 76), p.z);
           }
           const prevX = p.x;
-          p.x = damp(p.x, e.wp.x, 1.1, dt);
-          p.y = damp(p.y, e.wp.y, 1.0, dt);
+          p.x = damp(p.x, e.wp.x, 1.25, dt);
+          p.y = damp(p.y, e.wp.y, 1.15, dt);
           e.mesh.lookAt(this._targetPosition(e, player, _v1));
-          e.mesh.rotation.z = clamp((p.x - prevX) * -6, -1.1, 1.1);   // bank into the turn
+          e.mesh.rotation.z = clamp((p.x - prevX) * -6, -1.1, 1.1);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -460 && p.z < -40) {
-            e.fireCd = rand(1.4, 2.1);
+          if (e.fireCd <= 0 && p.z > -260 && p.z < -34) {
+            e.fireCd = rand(1.4, 2.05);
             const shots = this.difficultyWave >= 8 ? 3 : 2;
-            for (let k = 0; k < shots; k++) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'bolt', 1.1), k * 125);
-            if (this.difficultyWave >= 7 && Math.random() < 0.2) this._aimedShot(e, player, proj, 'shard', 1.25);
+            for (let k = 0; k < shots; k++) {
+              if (k === 0) this._aimedShot(e, player, proj, 'bolt', 1.08);
+              else this._scheduleShot(k * 0.125, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'bolt', 1.08));
+            }
+            if (this.difficultyWave >= 7 && Math.random() < 0.2) this._aimedShot(e, player, proj, 'shard', 1.2);
           }
           break;
         }
-        /* ---- BOMBER: slow heavy air unit that saturates with plasma & shockwaves ---- */
         case 'bomber': {
-          p.x = e.x0 + Math.sin(e.age * 0.5 + e.phase) * 22;
-          p.y = e.y0 + Math.sin(e.age * 0.6) * 4;
+          p.x = e.x0 + Math.sin(e.age * 0.55 + e.phase) * 18;
+          p.y = e.y0 + Math.sin(e.age * 0.65) * 4;
           e.mesh.rotation.y = Math.sin(e.age * 0.3) * 0.12;
-          e.mesh.rotation.z = Math.cos(e.age * 0.5) * 0.12;
+          e.mesh.rotation.z = Math.cos(e.age * 0.55) * 0.14;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -440 && p.z < -50) {
-            e.fireCd = rand(2.2, 3.1);
-            for (let k = -1; k <= 1; k++) { _v1.set(player.x + k * 22, player.y, PLAYER_Z).sub(p); proj.fireEnemy(p, _v1.clone(), 'plasma'); }
+          if (e.fireCd <= 0 && p.z > -260 && p.z < -38) {
+            e.fireCd = rand(2.1, 3.0);
+            for (let k = -1; k <= 1; k++) { _v1.set(player.x + k * 20, player.y, PLAYER_Z).sub(p); proj.fireEnemy(p, _v1, 'plasma'); }
             if (this.difficultyWave >= 8 && Math.random() < 0.3) this._aimedShot(e, player, proj, 'wave');
           }
           break;
         }
-        /* ---- FLAK: ground AA emplacement, tracks and lobs flak bursts ---- */
         case 'flak': {
           const head = e.mesh.userData.head;
           _v1.set(player.x, player.y, PLAYER_Z).sub(p);
           if (head) head.rotation.y = damp(head.rotation.y, Math.atan2(_v1.x, _v1.z) + Math.PI, 4, dt);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -470 && p.z < -30) {
-            e.fireCd = rand(2.0, 2.9);
+          if (e.fireCd <= 0 && p.z > -280 && p.z < -28) {
+            e.fireCd = rand(2.0, 2.8);
             const shots = this.difficultyWave >= 8 ? 3 : 2;
-            for (let k = 0; k < shots; k++) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'flak', 1.35), k * 170);
+            for (let k = 0; k < shots; k++) {
+              if (k === 0) this._aimedShot(e, player, proj, 'flak', 1.3);
+              else this._scheduleShot(k * 0.17, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'flak', 1.3));
+            }
           }
           break;
         }
-        /* ---- AEGIS AA BATTERY: fixed anti-air base, tracks player or wingmate before a flak burst ---- */
         case 'aabattery': {
           const head = e.mesh.userData.head;
           const radar = e.mesh.userData.radar;
@@ -540,226 +740,237 @@ export class Enemies {
             head.rotation.x = damp(head.rotation.x, pitch, 2.8, dt);
           }
           if (radar) radar.rotation.z += dt * (1.35 + (e.fireCd < 0.48 ? 3.8 : 0));
-          if (sensorMat?.emissive) sensorMat.emissiveIntensity = e.fireCd < 0.48 ? 2.25 : 1.18 + Math.sin(e.age * 3.2) * 0.16;
+          if (sensorMat?.emissive) sensorMat.emissiveIntensity = e.fireCd < 0.48 ? 2.35 : 1.25 + Math.sin(e.age * 3.2) * 0.16;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -500 && p.z < -32) {
-            e.fireCd = rand(2.7, 3.7);
+          if (e.fireCd <= 0 && p.z > -290 && p.z < -30) {
+            e.fireCd = rand(2.6, 3.5);
             const muzzle = e.mesh.userData.muzzle;
-            const origin = muzzle ? muzzle.getWorldPosition(_v2).clone() : p.clone().add(new THREE.Vector3(0, 8, -4));
+            const origin = muzzle ? muzzle.getWorldPosition(_v2).clone() : p.clone().add(new THREE.Vector3(0, 9, -5));
             const shots = this.difficultyWave >= 8 ? 3 : 2;
-            for (let k = 0; k < shots; k++) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'flak', 1.46, origin), k * 190);
+            for (let k = 0; k < shots; k++) {
+              if (k === 0) this._aimedShot(e, player, proj, 'flak', 1.4, origin);
+              else this._scheduleShot(k * 0.19, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'flak', 1.4, origin));
+            }
           }
           break;
         }
-        /* ---- HOVERTANK: ground hover vehicle, strafes and fires heavy spread ---- */
         case 'hovertank': {
           p.x = e.x0 + Math.sin(e.age * 0.8 + e.phase) * (e.amp + 8);
           p.y = e.y0 + Math.sin(e.age * 3) * 0.5;
           const turret = e.mesh.userData.turret;
           if (turret) { _v1.set(player.x, player.y, PLAYER_Z).sub(p); turret.rotation.y = damp(turret.rotation.y, Math.atan2(_v1.x, _v1.z) + Math.PI, 5, dt); }
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -470 && p.z < -30) {
-            e.fireCd = rand(1.8, 2.6);
-            for (let k = -1; k <= 1; k += 2) { _v1.set(player.x + k * 20, player.y, PLAYER_Z).sub(p); proj.fireEnemy(p, _v1.clone(), 'heavy'); }
+          if (e.fireCd <= 0 && p.z > -280 && p.z < -28) {
+            e.fireCd = rand(1.8, 2.5);
+            for (let k = -1; k <= 1; k += 2) { _v1.set(player.x + k * 18, player.y, PLAYER_Z).sub(p); proj.fireEnemy(p, _v1, 'heavy'); }
           }
           break;
         }
-        /* ---- LAUNCHER: ground battery firing homing missile volleys ---- */
         case 'launcher': {
           const rack = e.mesh.userData.rack;
           if (rack) rack.rotation.z = Math.sin(e.age * 1.5) * 0.12;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -480 && p.z < -30) {
-            e.fireCd = rand(3.0, 4.1);
+          if (e.fireCd <= 0 && p.z > -280 && p.z < -28) {
+            e.fireCd = rand(2.9, 3.9);
             const missiles = this.difficultyWave >= 8 ? 3 : 2;
-            for (let k = 0; k < missiles; k++) setTimeout(() => {
-              if (!e.alive) return;
-              _v2.set(p.x + rand(-2, 2), p.y + 2, p.z);
+            for (let k = 0; k < missiles; k++) this._scheduleShot(k * 0.22, () => {
+              if (!e.alive || e.dying) return;
+              _v2.set(p.x + rand(-2, 2), p.y + 3, p.z);
               _v1.set(player.x, player.y, PLAYER_Z).sub(_v2);
-              proj.fireEnemy(_v2.clone(), _v1.clone(), 'missile');
-            }, k * 220);
+              proj.fireEnemy(_v2, _v1, 'missile');
+            });
           }
           break;
         }
-        /* ---- SAUCER: erratic UFO — sudden darts, spinning lights, energy rings ---- */
         case 'saucer': {
           if (!e.wp) { e.wp = new THREE.Vector3(p.x, p.y, p.z); e.wpT = 0; }
           e.wpT -= dt;
           if (e.wpT <= 0) {
-            e.wpT = rand(0.7, 1.5);   // impossible-looking course changes
-            e.wp.set(clamp(player.x + rand(-160, 160), -240, 240), rand(20, 145), clamp(p.z + rand(-90, 90), -420, -80));
+            e.wpT = rand(0.75, 1.45);
+            e.wp.set(clamp(player.x + rand(-100, 100), -145, 145), rand(16, 72), rand(-165, -55));
           }
-          p.x = damp(p.x, e.wp.x, 1.7, dt);
-          p.y = damp(p.y, e.wp.y, 1.7, dt);
-          p.z = damp(p.z, e.wp.z, 1.5, dt);
-          e.mesh.rotation.y += dt * 2.2;
-          e.mesh.rotation.z = Math.sin(e.age * 3) * 0.12;     // wobble
+          p.x = damp(p.x, e.wp.x, 1.85, dt);
+          p.y = damp(p.y, e.wp.y, 1.85, dt);
+          p.z = damp(p.z, e.wp.z, 1.7, dt);
+          e.mesh.rotation.y += dt * 2.4;
+          e.mesh.rotation.z = Math.sin(e.age * 3) * 0.14;
           if (e.mesh.userData.lights) e.mesh.userData.lights.rotation.y -= dt * 5;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z < -60) {
-            e.fireCd = rand(1.7, 2.7);
+          if (e.fireCd <= 0 && p.z > -230 && p.z < -42) {
+            e.fireCd = rand(1.65, 2.5);
             this._aimedShot(e, player, proj, 'wave');
             if (this.difficultyWave >= 7 && Math.random() < 0.35) this._aimedShot(e, player, proj, 'plasma');
           }
           break;
         }
-        /* ---- CARRIER: attack mothership — launches fighter drones from its bay ---- */
         case 'carrier': {
-          p.x = e.x0 + Math.sin(e.age * 0.3 + e.phase) * 14;
+          p.x = e.x0 + Math.sin(e.age * 0.32 + e.phase) * 14;
           p.y = e.y0 + Math.sin(e.age * 0.5) * 3;
-          e.mesh.rotation.z = Math.cos(e.age * 0.4) * 0.05;
-          e.launchCd = (e.launchCd ?? rand(2, 4)) - dt;
-          if (e.launchCd <= 0 && p.z > -480 && p.z < -100) {
-            e.launchCd = rand(7.5, 10.5);
-            for (let k = 0; k < (this.difficultyWave >= 9 ? 2 : 1); k++) this.spawn('drone', { x: p.x + rand(-5, 5), y: Math.max(6, p.y - 3), z: p.z - 6, speed: 1.05 });
+          e.mesh.rotation.z = Math.cos(e.age * 0.4) * 0.06;
+          e.launchCd = (e.launchCd ?? rand(1.8, 3.2)) - dt;
+          if (e.launchCd <= 0 && p.z > -270 && p.z < -65) {
+            e.launchCd = rand(7.0, 9.8);
+            for (let k = 0; k < (this.difficultyWave >= 9 ? 2 : 1); k++) this.spawn('drone', { x: p.x + rand(-8, 8), y: Math.max(8, p.y - 4), z: p.z - 8, speed: 1.05 });
             game.hud?.alert?.('⚠ FIGHTERS LAUNCHED', 1.2);
           }
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -460 && p.z < -60) {
-            e.fireCd = rand(1.8, 2.8);
-            this._aimedShot(e, player, proj, 'heavy', 1.4);
+          if (e.fireCd <= 0 && p.z > -265 && p.z < -45) {
+            e.fireCd = rand(1.75, 2.65);
+            this._aimedShot(e, player, proj, 'heavy', 1.35);
           }
           break;
         }
-
-        /* ---- SKYRAIDER: a mobile relay carrier that deploys escort drones ---- */
         case 'skyraider': {
-          p.x = e.x0 + Math.sin(e.age * 0.26 + e.phase) * 22;
+          p.x = e.x0 + Math.sin(e.age * 0.28 + e.phase) * 18;
           p.y = e.y0 + Math.sin(e.age * 0.55) * 4;
           e.mesh.rotation.z = Math.cos(e.age * 0.35) * 0.07;
-          e.launchCd = (e.launchCd ?? rand(2, 4)) - dt;
-          if (e.launchCd <= 0 && p.z > -480 && p.z < -100) {
-            e.launchCd = rand(8.0, 11.0);
-            for (let k = 0; k < (this.difficultyWave >= 10 ? 2 : 1); k++) this.spawn('relaydrone', { x: p.x + rand(-8, 8), y: Math.max(10, p.y - 4), z: p.z - 8, speed: 1.05 });
+          e.launchCd = (e.launchCd ?? rand(1.8, 3.4)) - dt;
+          if (e.launchCd <= 0 && p.z > -270 && p.z < -65) {
+            e.launchCd = rand(7.5, 10.5);
+            for (let k = 0; k < (this.difficultyWave >= 10 ? 2 : 1); k++) this.spawn('relaydrone', { x: p.x + rand(-10, 10), y: Math.max(10, p.y - 5), z: p.z - 10, speed: 1.05 });
             game.hud?.alert?.('⚠ RELAY DRONES LAUNCHED', 1.2);
           }
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -460 && p.z < -60) {
-            e.fireCd = rand(2.0, 3.0);
+          if (e.fireCd <= 0 && p.z > -265 && p.z < -45) {
+            e.fireCd = rand(1.9, 2.8);
             this._aimedShot(e, player, proj, 'heavy', 1.25);
             if (this.difficultyWave >= 10 && Math.random() < 0.35) this._aimedShot(e, player, proj, 'plasma');
           }
           break;
         }
-
-        /* ================= expansion-pack enemies ================= */
-        /* ---- SCOUT: eye drone that swoops in a lazy arc, then peels off ---- */
         case 'scout': {
           if (!e.wp) { e.wp = new THREE.Vector3(p.x, p.y, p.z); e.wpT = 0; }
           e.wpT -= dt;
           if (e.wpT <= 0) {
-            e.wpT = rand(2.2, 3.4);
-            e.wp.set(clamp(player.x + rand(-110, 110), -240, 240), clamp(player.y + rand(-16, 40), 12, 150), p.z);
+            e.wpT = rand(1.8, 2.8);
+            e.wp.set(clamp(player.x + rand(-78, 78), -145, 145), clamp(player.y + rand(-12, 26), 12, 72), p.z);
           }
-          p.x = damp(p.x, e.wp.x, 1.2, dt);
-          p.y = damp(p.y, e.wp.y, 1.1, dt);
-          e.mesh.rotation.y += dt * 0.9;                       // the eye slowly scans
-          e.mesh.rotation.z = Math.sin(e.age * 1.3) * 0.15;
+          p.x = damp(p.x, e.wp.x, 1.35, dt);
+          p.y = damp(p.y, e.wp.y, 1.25, dt);
+          e.mesh.rotation.y += dt * 0.9;
+          e.mesh.rotation.z = Math.sin(e.age * 1.4) * 0.16;
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -460 && p.z < -50) {
-            e.fireCd = rand(1.6, 2.4);
+          if (e.fireCd <= 0 && p.z > -260 && p.z < -36) {
+            e.fireCd = rand(1.55, 2.3);
             this._aimedShot(e, player, proj, 'orb');
           }
           break;
         }
-        /* ---- FIGHTER: disciplined strafing runs across the lane ---- */
         case 'fighter':
-        /* ---- SKY TALON: conventional aircraft interceptor — fast banking sweep, then a precise bolt pair ---- */
         case 'skytalon': {
+          // Aggressive close-quarters dogfighters: alternate high-G cross-overs & diving scissor passes!
           if (!e.wp) { e.wp = new THREE.Vector3(p.x, p.y, p.z); e.wpT = 0; }
           e.wpT -= dt;
           if (e.wpT <= 0) {
-            e.wpT = rand(1.8, 2.8);
-            e.wp.set(clamp(player.x + (Math.random() < 0.5 ? -1 : 1) * rand(60, 150), -245, 245),
-              clamp(player.y + rand(e.type === 'skytalon' ? -22 : -14, e.type === 'skytalon' ? 22 : 34), 10, 150), p.z);
+            e.wpT = rand(0.95, 1.55);
+            e.side = -e.side;
+            e.wp.set(
+              clamp(player.x + e.side * rand(28, 76), -142, 142),
+              clamp(player.y + rand(e.type === 'skytalon' ? -14 : -10, e.type === 'skytalon' ? 20 : 24), 10, 76),
+              p.z
+            );
           }
           const pvx = p.x;
-          p.x = damp(p.x, e.wp.x, e.type === 'skytalon' ? 1.75 : 1.3, dt);
-          p.y = damp(p.y, e.wp.y, e.type === 'skytalon' ? 1.55 : 1.2, dt);
+          p.x = damp(p.x, e.wp.x, e.type === 'skytalon' ? 2.45 : 1.95, dt);
+          p.y = damp(p.y, e.wp.y, e.type === 'skytalon' ? 2.1 : 1.75, dt);
           e.mesh.lookAt(this._targetPosition(e, player, _v1));
-          e.mesh.rotation.z = clamp((p.x - pvx) * -5, -0.9, 0.9);
+          e.mesh.rotation.z = clamp((p.x - pvx) * -5.5, -1.15, 1.15);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -460 && p.z < -50) {
-            e.fireCd = e.type === 'skytalon' ? rand(1.9, 2.7) : rand(1.6, 2.4);
-            const shots = e.type === 'skytalon' ? 2 : (this.difficultyWave >= 8 ? 2 : 1);
-            for (let k = 0; k < shots; k++) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'bolt', e.type === 'skytalon' ? 1.20 : 1.1), k * (e.type === 'skytalon' ? 190 : 155));
+          if (e.fireCd <= 0 && p.z > -255 && p.z < -28) {
+            e.fireCd = e.type === 'skytalon' ? rand(1.65, 2.35) : rand(1.45, 2.15);
+            const shots = e.type === 'skytalon' ? 2 : (this.difficultyWave >= 7 ? 2 : 1);
+            for (let k = 0; k < shots; k++) {
+              if (k === 0) this._aimedShot(e, player, proj, 'bolt', e.type === 'skytalon' ? 1.15 : 1.08);
+              else this._scheduleShot(k * (e.type === 'skytalon' ? 0.175 : 0.15), () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'bolt', e.type === 'skytalon' ? 1.15 : 1.08));
+            }
           }
           break;
         }
-        /* ---- HARRIER: high-speed dive bomber — telegraphed vertical slash and shard fan ---- */
         case 'harrier': {
+          // Steep swoop-and-climb interceptor diving right down to player altitude!
           if (!e.wp) { e.wp = new THREE.Vector3(p.x, p.y, p.z); e.wpT = 0; }
           e.wpT -= dt;
           if (e.wpT <= 0) {
-            e.wpT = rand(1.15, 1.8);
-            e.wp.set(clamp(player.x + rand(-70, 70), -235, 235), clamp(player.y + rand(-26, 70), 18, 165), p.z);
+            e.wpT = rand(0.85, 1.35);
+            const dive = p.y > player.y + 8;
+            e.wp.set(clamp(player.x + rand(-48, 48), -136, 136), clamp(dive ? player.y + rand(-6, 6) : player.y + rand(18, 38), 11, 80), p.z);
           }
-          const oldY = p.y;
-          p.x = damp(p.x, e.wp.x, 1.8, dt);
-          p.y = damp(p.y, e.wp.y, 1.9, dt);
+          const oldX = p.x, oldY = p.y;
+          p.x = damp(p.x, e.wp.x, 2.4, dt);
+          p.y = damp(p.y, e.wp.y, 2.45, dt);
           e.mesh.lookAt(this._targetPosition(e, player, _v1));
-          e.mesh.rotation.x = clamp((p.y - oldY) * 0.12, -0.55, 0.55);
+          e.mesh.rotation.x = clamp((p.y - oldY) * 0.14, -0.6, 0.6);
+          e.mesh.rotation.z = clamp((oldX - p.x) * 4.5, -1.05, 1.05);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -470 && p.z < -55) {
-            e.fireCd = rand(1.55, 2.25);
-            for (let k = -1; k <= 1; k++) setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'shard', 1.28), (k + 1) * 110);
+          if (e.fireCd <= 0 && p.z > -255 && p.z < -30) {
+            e.fireCd = rand(1.45, 2.1);
+            for (let k = -1; k <= 1; k++) {
+              if (k === -1) this._aimedShot(e, player, proj, 'shard', 1.2);
+              else this._scheduleShot((k + 1) * 0.105, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'shard', 1.2));
+            }
           }
           break;
         }
-        /* ---- PHANTOM: lateral phase runner — pulses its hull then fires a split lock-on volley ---- */
         case 'phantom': {
-          const stride = Math.sin(e.age * 2.6 + e.phase);
-          p.x = e.x0 + stride * (e.amp + 42);
-          p.y = e.y0 + Math.cos(e.age * 1.75 + e.phase) * 10;
-          const pulse = 0.9 + (Math.sin(e.age * 8) + 1) * 0.07;
-          e.mesh.scale.setScalar(pulse);
-          e.mesh.rotation.z = Math.cos(e.age * 2.6 + e.phase) * 0.48;
+          // Phase-shifting striker: telegraphed violet phase-dash lateral blinks!
+          e.dashCd -= dt;
+          if (e.dashCd <= 0 && p.z > -230 && p.z < -42) {
+            e.dashCd = rand(2.1, 3.0);
+            const dashDir = p.x > player.x ? -1 : 1;
+            game?.particles?.weaponTelegraph?.(p.x, p.y, p.z, 0xb886ff, 1.4);
+            e.x0 = clamp(e.x0 + dashDir * rand(30, 44), -135, 135);
+            e.evadeT = 0.42;
+            e.evadeDir = dashDir;
+            e.evadeSpin = dashDir * TAU;
+          }
+          const stride = Math.sin(e.age * 2.8 + e.phase);
+          p.x = damp(p.x, e.x0 + stride * (e.amp + 26), 4.8, dt);
+          p.y = clamp(e.y0 + Math.cos(e.age * 2.1 + e.phase) * 10, 10, 76);
+          e.baseScale = (e.mesh.userData.meshScale ?? 1) * (0.94 + (Math.sin(e.age * 8) + 1) * 0.05);
+          e.mesh.rotation.z = Math.cos(e.age * 2.8 + e.phase) * 0.56;
           e.mesh.lookAt(this._targetPosition(e, player, _v1));
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -480 && p.z < -50) {
-            e.fireCd = rand(1.9, 2.7);
-            this._aimedShot(e, player, proj, 'homing', 1.15);
-            setTimeout(() => e.alive && this._aimedShot(e, player, proj, 'venom', 1.05), 170);
+          if (e.fireCd <= 0 && p.z > -255 && p.z < -30) {
+            e.fireCd = rand(1.7, 2.45);
+            this._aimedShot(e, player, proj, 'homing', 1.1);
+            this._scheduleShot(0.16, () => e.alive && !e.dying && this._aimedShot(e, player, proj, 'venom', 1.05));
           }
           break;
         }
-        /* ---- DREADWING: heavy command carrier — deploys late-campaign escorts and missile barrages ---- */
         case 'dreadwing': {
-          p.x = e.x0 + Math.sin(e.age * 0.26 + e.phase) * 28;
+          p.x = e.x0 + Math.sin(e.age * 0.28 + e.phase) * 22;
           p.y = e.y0 + Math.sin(e.age * 0.42) * 5;
           e.mesh.rotation.z = Math.cos(e.age * 0.3) * 0.08;
-          e.launchCd = (e.launchCd ?? rand(2.4, 4.6)) - dt;
-          if (e.launchCd <= 0 && p.z > -500 && p.z < -105) {
-            e.launchCd = rand(8.5, 11.5);
-            this.spawn('harrier', { x: p.x - 8, y: Math.max(18, p.y - 3), z: p.z - 10, speed: 1.12 });
-            this.spawn('phantom', { x: p.x + 8, y: Math.max(22, p.y + 2), z: p.z - 14, speed: 0.9 });
+          e.launchCd = (e.launchCd ?? rand(2.2, 4.0)) - dt;
+          if (e.launchCd <= 0 && p.z > -280 && p.z < -70) {
+            e.launchCd = rand(8.0, 11.0);
+            this.spawn('harrier', { x: p.x - 10, y: Math.max(16, p.y - 3), z: p.z - 12, speed: 1.12 });
+            this.spawn('phantom', { x: p.x + 10, y: Math.max(20, p.y + 2), z: p.z - 16, speed: 0.92 });
             game.hud?.alert?.('⚠ PHASE ESCORTS DEPLOYED', 1.25);
           }
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -470 && p.z < -55) {
-            e.fireCd = rand(2.0, 3.0);
+          if (e.fireCd <= 0 && p.z > -275 && p.z < -42) {
+            e.fireCd = rand(1.9, 2.8);
             for (const s of [-1, 1]) {
-              _v2.set(p.x + s * 6, p.y, p.z);
+              _v2.set(p.x + s * 8, p.y, p.z);
               _v1.set(player.x + s * 10, player.y, PLAYER_Z).sub(_v2);
-              proj.fireEnemy(_v2.clone(), _v1.clone(), 'missile');
+              proj.fireEnemy(_v2, _v1, 'missile');
             }
-            this._aimedShot(e, player, proj, 'heavy', 1.25);
+            this._aimedShot(e, player, proj, 'heavy', 1.2);
           }
           break;
         }
-        /* ---- AEGIS SIEGE CARRIER: command ship cycles escort waves with a telegraphed broadside ---- */
         case 'siegecarrier': {
-          p.x = e.x0 + Math.sin(e.age * 0.22 + e.phase) * 32;
+          p.x = e.x0 + Math.sin(e.age * 0.24 + e.phase) * 24;
           p.y = e.y0 + Math.sin(e.age * 0.46 + e.phase) * 5;
           e.mesh.rotation.z = Math.cos(e.age * 0.28 + e.phase) * 0.07;
           e.mesh.lookAt(this._targetPosition(e, player, _v1));
-          e.launchCd = (e.launchCd ?? rand(3.8, 5.2)) - dt;
-          if (e.launchCd <= 0 && p.z > -500 && p.z < -115) {
-            e.launchCd = rand(9.0, 12.5);
-            // Small, alternating escort wave: it frames the carrier without sealing the center lane.
-            this.taskForce('pincer', { x: p.x * 0.35, y: Math.max(28, p.y - 8), z: p.z - 28, count: 2 }, game);
-            game.particles?.flash(p.x, p.y, p.z - 8, 1.25, 0xff744a);
-            game.particles?.ring(p.x, p.y, p.z - 8, { color: 0xff744a, from: 2, radius: 24, dur: 0.42, opacity: 0.42 });
+          e.launchCd = (e.launchCd ?? rand(3.2, 4.6)) - dt;
+          if (e.launchCd <= 0 && p.z > -280 && p.z < -75) {
+            e.launchCd = rand(8.5, 11.5);
+            this.taskForce('pincer', { x: p.x * 0.35, y: Math.max(22, p.y - 8), z: p.z - 28, count: 2 }, game);
+            game.particles?.flash(p.x, p.y, p.z - 10, 1.4, 0xff744a);
+            game.particles?.ring(p.x, p.y, p.z - 10, { color: 0xff744a, from: 2, radius: 28, dur: 0.42, opacity: 0.45 });
             audio.escortLaunch();
             game.hud?.alert?.('⚠ AEGIS ESCORT WAVE', 1.35);
           }
@@ -767,201 +978,247 @@ export class Enemies {
           const bayGlow = e.mesh.userData.glow;
           const charge = clamp((0.82 - Math.max(0, e.fireCd)) / 0.82, 0, 1);
           if (bayGlow) {
-            bayGlow.scale.setScalar(3.5 + charge * 2.9 + Math.sin(e.age * 20) * charge * 0.35);
-            bayGlow.material.opacity = 0.66 + charge * 0.30;
+            bayGlow.scale.setScalar(5.0 + charge * 3.8 + Math.sin(e.age * 20) * charge * 0.4);
+            bayGlow.material.opacity = 0.68 + charge * 0.30;
           }
-          // One short reaction window: the bay visibly and audibly charges before shots leave the hull.
-          if (charge > 0 && !e.siegeTelegraph && p.z > -485 && p.z < -70) {
+          if (charge > 0 && !e.siegeTelegraph && p.z > -275 && p.z < -55) {
             e.siegeTelegraph = true;
-            game.particles?.muzzle(p.x, p.y, p.z - 8, 1.5, 0xffc078);
-            game.particles?.ring(p.x, p.y, p.z - 8, { color: 0xff9a58, from: 1.4, radius: 12, dur: 0.72, opacity: 0.24 });
+            game.particles?.muzzle(p.x, p.y, p.z - 10, 1.7, 0xffc078);
+            game.particles?.ring(p.x, p.y, p.z - 10, { color: 0xff9a58, from: 1.6, radius: 15, dur: 0.72, opacity: 0.28 });
             audio.siegeCharge();
           }
-          if (e.fireCd <= 0 && p.z > -465 && p.z < -70) {
-            e.fireCd = rand(3.2, 4.2);
+          if (e.fireCd <= 0 && p.z > -270 && p.z < -55) {
+            e.fireCd = rand(3.0, 4.0);
             e.siegeTelegraph = false;
-            // Reactor discharge establishes the three-beat broadside.
-            game.particles?.flash(p.x, p.y, p.z - 8, 1.15, 0xffb36a);
-            game.particles?.ring(p.x, p.y, p.z - 8, { color: 0xff8a4a, from: 2, radius: 18, dur: 0.52, opacity: 0.38 });
-            game.particles?.emit(p.x, p.y, p.z - 8, { count: 14, speed: 28, color: 0xffe2a2, color2: 0xff5a24, life: 0.42, size: 3.2, drag: 2.6, spread: 1.6 });
+            game.particles?.flash(p.x, p.y, p.z - 10, 1.25, 0xffb36a);
+            game.particles?.ring(p.x, p.y, p.z - 10, { color: 0xff8a4a, from: 2.5, radius: 22, dur: 0.52, opacity: 0.42 });
+            game.particles?.emit(p.x, p.y, p.z - 10, { count: 16, speed: 30, color: 0xffe2a2, color2: 0xff5a24, life: 0.42, size: 3.6, drag: 2.6, spread: 1.8 });
             this._siegeShot(e, player, proj, game, -1, 'heavy');
-            setTimeout(() => e.alive && this._siegeShot(e, player, proj, game, 1, 'heavy'), 250);
-            setTimeout(() => e.alive && this._siegeShot(e, player, proj, game, 0, 'wave'), 520);
+            this._scheduleShot(0.25, () => e.alive && !e.dying && this._siegeShot(e, player, proj, game, 1, 'heavy'));
+            this._scheduleShot(0.52, () => e.alive && !e.dying && this._siegeShot(e, player, proj, game, 0, 'wave'));
           }
           break;
         }
-        /* ---- QUADTANK: armoured hover tank grinding along the deck ---- */
         case 'quadtank': {
           p.x = e.x0 + Math.sin(e.age * 0.45 + e.phase) * (e.amp + 6);
           p.y = e.y0 + Math.sin(e.age * 2.4) * 0.4;
           _v1.set(player.x, player.y, PLAYER_Z).sub(p);
           e.mesh.rotation.y = damp(e.mesh.rotation.y, Math.atan2(_v1.x, _v1.z) + Math.PI, 2.4, dt);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -470 && p.z < -30) {
-            e.fireCd = rand(2.1, 3.0);
-            for (let k = -1; k <= 1; k += 2) { _v2.set(player.x + k * 18, player.y, PLAYER_Z).sub(p); proj.fireEnemy(p, _v2.clone(), 'heavy'); }
+          if (e.fireCd <= 0 && p.z > -280 && p.z < -28) {
+            e.fireCd = rand(2.0, 2.9);
+            for (let k = -1; k <= 1; k += 2) { _v2.set(player.x + k * 18, player.y, PLAYER_Z).sub(p); proj.fireEnemy(p, _v2, 'heavy'); }
           }
           break;
         }
-        /* ---- TRILOBITE / CANNON / SHORECANNON: emplaced guns that track ---- */
         case 'trilobite':
         case 'cannon':
         case 'shorecannon': {
           _v1.set(player.x, player.y, PLAYER_Z).sub(p);
           e.mesh.rotation.y = damp(e.mesh.rotation.y, Math.atan2(_v1.x, _v1.z) + Math.PI, 2.6, dt);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -470 && p.z < -30) {
+          if (e.fireCd <= 0 && p.z > -280 && p.z < -28) {
             const heavy = e.type === 'trilobite';
-            e.fireCd = heavy ? rand(2.0, 2.9) : rand(2.2, 3.1);
+            e.fireCd = heavy ? rand(1.95, 2.8) : rand(2.1, 3.0);
             const shots = heavy ? (this.difficultyWave >= 9 ? 3 : 2) : 2;
             for (let k = 0; k < shots; k++) {
-              setTimeout(() => e.alive && this._aimedShot(e, player, proj, heavy ? 'flak' : 'heavy', 1.25), k * 180);
+              if (k === 0) this._aimedShot(e, player, proj, heavy ? 'flak' : 'heavy', 1.2);
+              else this._scheduleShot(k * 0.18, () => e.alive && !e.dying && this._aimedShot(e, player, proj, heavy ? 'flak' : 'heavy', 1.2));
             }
           }
           break;
         }
-        /* ---- MECH: heavy walker, slow advance + missile volleys ---- */
         case 'mech': {
           p.x = e.x0 + Math.sin(e.age * 0.3 + e.phase) * 10;
-          p.y = e.y0 + Math.abs(Math.sin(e.age * 2.2)) * 1.2;   // plodding gait
+          p.y = e.y0 + Math.abs(Math.sin(e.age * 2.2)) * 1.4;
           _v1.set(player.x, player.y, PLAYER_Z).sub(p);
           e.mesh.rotation.y = damp(e.mesh.rotation.y, Math.atan2(_v1.x, _v1.z) + Math.PI, 1.8, dt);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -480 && p.z < -30) {
-            e.fireCd = rand(2.8, 3.9);
-            for (let k = 0; k < 2; k++) setTimeout(() => {
-              if (!e.alive) return;
-              _v2.set(p.x + rand(-4, 4), p.y + 4, p.z);
+          if (e.fireCd <= 0 && p.z > -285 && p.z < -28) {
+            e.fireCd = rand(2.6, 3.6);
+            for (let k = 0; k < 2; k++) this._scheduleShot(k * 0.22, () => {
+              if (!e.alive || e.dying) return;
+              _v2.set(p.x + rand(-4, 4), p.y + 6, p.z);
               _v1.set(player.x, player.y, PLAYER_Z).sub(_v2);
-              proj.fireEnemy(_v2.clone(), _v1.clone(), 'missile');
-            }, k * 220);
+              proj.fireEnemy(_v2, _v1, 'missile');
+            });
           }
           break;
         }
-        /* ---- GUNBOAT / FRIGATE: surface warships that broadside the lane ---- */
         case 'gunboat':
         case 'frigate': {
           const big = e.type === 'frigate';
           p.x = e.x0 + Math.sin(e.age * 0.22 + e.phase) * 12;
-          p.y = e.y0 + Math.sin(e.age * 0.9 + e.phase) * (big ? 1.1 : 0.8);   // riding the swell
+          p.y = e.y0 + Math.sin(e.age * 0.9 + e.phase) * (big ? 1.2 : 0.9);
           e.mesh.rotation.z = Math.sin(e.age * 0.9 + e.phase) * 0.05;
           e.mesh.rotation.y = damp(e.mesh.rotation.y, Math.sin(e.age * 0.22 + e.phase) * 0.3, 1.5, dt);
           e.fireCd -= dt;
-          if (e.fireCd <= 0 && p.z > -500 && p.z < -40) {
-            e.fireCd = big ? rand(1.4, 2.0) : rand(1.9, 2.7);
+          if (e.fireCd <= 0 && p.z > -295 && p.z < -36) {
+            e.fireCd = big ? rand(1.4, 2.0) : rand(1.9, 2.6);
             const guns = big ? 3 : 2;
-            for (let k = 0; k < guns; k++) setTimeout(() => {
-              if (!e.alive) return;
-              _v2.set(p.x + rand(-6, 6) * (big ? 1.6 : 1), p.y + 5, p.z);
+            for (let k = 0; k < guns; k++) this._scheduleShot(k * 0.17, () => {
+              if (!e.alive || e.dying) return;
+              _v2.set(p.x + rand(-7, 7) * (big ? 1.6 : 1), p.y + 6, p.z);
               _v1.set(player.x + rand(-12, 12), player.y, PLAYER_Z).sub(_v2);
-              proj.fireEnemy(_v2.clone(), _v1.clone(), big ? 'flak' : 'heavy');
-            }, k * 170);
+              proj.fireEnemy(_v2, _v1, big ? 'flak' : 'heavy');
+            });
           }
           break;
         }
       }
 
+      // Reactive evasive jink & barrel-roll when damaged in flight!
+      if (e.evadeT > 0) {
+        e.evadeT = Math.max(0, e.evadeT - dt);
+        const k = e.evadeT / 0.52;
+        e.x0 = clamp(e.x0 + e.evadeDir * 44 * k * dt, -142, 142);
+        p.x = clamp(p.x + e.evadeDir * 44 * k * dt, -152, 152);
+        e.mesh.rotation.z += e.evadeSpin * (1 - k);
+      }
+
+      // Gentle 3D world obstacle avoidance so airborne enemies weave cleanly around cliffs & structures
+      if (!e.ground && p.z > -185 && p.z < 18 && game?.forEachWorldObstacle) {
+        game.forEachWorldObstacle((cx, cy, cz, rh, hy) => {
+          const padY = hy + e.radius * 0.75 + 2.5;
+          if (Math.abs(p.y - cy) >= padY) return;
+          const padR = rh + e.radius + 3.5;
+          const dx = p.x - cx, dz = p.z - cz;
+          if (Math.abs(dx) >= padR || Math.abs(dz) >= padR) return;
+          const dist = Math.hypot(dx, dz);
+          if (dist < padR) {
+            const dir = Math.abs(dx) > 0.5 ? Math.sign(dx) : (cx > 0 ? -1 : 1);
+            const push = (padR - dist + 2.5) * Math.min(1, dt * 11);
+            p.x = clamp(p.x + dir * push, -168, 168);
+            e.x0 = clamp(e.x0 + dir * push * 0.7, -148, 148);
+            if (p.y > cy + hy * 0.35 && p.y < 84) p.y += push * 0.55;
+          }
+        });
+      }
+
+      // Apply physical hit recoil jolt (squash-pop + roll shudder + brief knockback!)
+      if (e.recoil > 0) {
+        e.recoil = Math.max(0, e.recoil - dt * 7.5);
+        const pop = e.baseScale * (1 + e.recoil * 0.09);
+        if (e.type !== 'mine') e.mesh.scale.setScalar(pop);
+        e.mesh.rotation.z += e.hitSpin * e.recoil * 0.28;
+      } else if (e.type !== 'mine') {
+        e.mesh.scale.setScalar(e.baseScale);
+      }
+
       this._updateMarker(e, player, game);
 
-      // hit flash decay
       if (e.flash > 0) {
         e.flash -= dt;
         if (e.flash <= 0) this._setFlash(e, false);
       }
 
-      // passed the player → despawn; self-z elites time out so they don't pile up
-      if (p.z > 20) this.remove(e);
-      else if ((e.type === 'seeker' || e.type === 'sniper' || e.type === 'saucer') && e.age > 24) this.remove(e);
+      if (p.z > 24) this.remove(e);
+      else if ((e.type === 'seeker' || e.type === 'sniper' || e.type === 'saucer') && e.age > 20) this.remove(e);
     }
   }
 
-  /** Attach a persistent world-space IFF marker. Unlike friendly portraits, these use angular hostile frames and threat colours. */
+  /** Crisp tactical targeting bracket + diegetic HP bar (only shown when damaged) */
   _addMarker(e) {
     const p = markerProfile(e.type, e.ground);
     const g = new THREE.Group();
-    g.position.y = p.y + e.radius * 1.2;
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: dotTexture(), color: p.color, transparent: true, opacity: 0.22,
-      blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, fog: false,
-    }));
-    halo.scale.set(9 * p.scale, 4.5 * p.scale, 1); g.add(halo);
+    const boxSize = Math.max(9.5, e.radius * 2.15) * p.scale;
+
     const frame = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: markerTexture(p.label), color: p.color, transparent: true, opacity: 0.90,
+      map: bracketTexture(p.style), color: p.color, transparent: true, opacity: 0.62,
       depthTest: false, depthWrite: false, fog: false,
     }));
-    frame.scale.set(13 * p.scale, 3.65 * p.scale, 1); frame.position.y = 1.35 * p.scale; g.add(frame);
+    frame.scale.set(boxSize, boxSize, 1);
+    g.add(frame);
+
     const lock = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: markerTexture('LOCK'), color: 0x62ffad, transparent: true, opacity: 0,
+      map: bracketTexture('lock'), color: 0x5effa8, transparent: true, opacity: 0,
       depthTest: false, depthWrite: false, fog: false,
     }));
-    lock.scale.set(16 * p.scale, 4.45 * p.scale, 1); lock.position.y = 1.35 * p.scale; g.add(lock);
-    const brackets = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: markerTexture(''), color: 0x62ffad, transparent: true, opacity: 0,
-      depthTest: false, depthWrite: false, fog: false,
-    }));
-    brackets.scale.set(19 * p.scale, 6.6 * p.scale, 1); brackets.position.y = 1.35 * p.scale; g.add(brackets);
+    lock.scale.set(boxSize * 1.28, boxSize * 1.28, 1);
+    g.add(lock);
+
+    // Compact diegetic HP bar using ONE shared unit PlaneGeometry (zero geometry alloc/leak!)
+    const hpW = Math.max(7.0, e.radius * 1.65);
+    const hpBg = new THREE.Mesh(
+      HP_BAR_GEO,
+      new THREE.MeshBasicMaterial({ color: 0x0e1424, transparent: true, opacity: 0.78, depthTest: false, depthWrite: false, fog: false })
+    );
+    hpBg.scale.set(hpW, 0.85, 1);
+    hpBg.position.set(0, e.radius * 1.15 + 1.8, 0);
+    hpBg.visible = false;
+    const hpFill = new THREE.Mesh(
+      HP_BAR_GEO,
+      new THREE.MeshBasicMaterial({ color: 0xff6252, depthTest: false, depthWrite: false, fog: false })
+    );
+    hpFill.scale.set(0.95, 0.62, 1);
+    hpFill.position.z = 0.02;
+    hpBg.add(hpFill);
+    g.add(hpBg);
+
     e.mesh.add(g);
-    e.marker = { g, halo, frame, lock, brackets, profile: p };
+    e.marker = { g, frame, lock, hpBg, hpFill, boxSize, profile: p };
   }
 
-  /** Update threat marker state after the enemy AI has chosen movement and fire timing. */
   _updateMarker(e, player, game) {
     const m = e.marker;
     if (!m) return;
     const z = e.mesh.position.z;
-    const inViewBand = z > -650 && z < 44;
-    m.g.visible = inViewBand && e.alive;
+    const inViewBand = z > -350 && z < 12;
+    m.g.visible = inViewBand && e.alive && !e.dying;
     if (!m.g.visible) return;
-    const isLocked = game._chargeLock?.ref === e;
-    const imminent = e.fireCd < 0.42 && z > -470 && z < -38;
+    const isLocked = game._isLocked ? game._isLocked(e) : (game._chargeLock?.ref === e);
+    const imminent = e.fireCd < 0.45 && z > -265 && z < -30;
     const t = e.age;
     const base = m.profile.color;
-    const col = isLocked ? 0x62ffad : imminent ? 0xff354d : base;
+    const col = isLocked ? 0x5effa8 : imminent ? 0xff2845 : base;
     m.frame.material.color.setHex(col);
-    m.halo.material.color.setHex(col);
-    m.lock.material.opacity = isLocked ? 0.98 : 0;
-    m.brackets.material.opacity = isLocked ? 0.78 + Math.sin(t * 12) * 0.20 : 0;
-    m.frame.material.opacity = isLocked ? 0.25 : 0.92;
-    m.halo.material.opacity = imminent ? 0.62 + Math.sin(t * 17) * 0.22 : (m.profile.class === 'heavy' ? 0.34 : 0.20);
-    const pulse = 1 + Math.sin(t * (imminent ? 14 : 5) + e.phase) * (imminent ? 0.20 : 0.07);
-    m.halo.scale.set(9 * m.profile.scale * pulse, 4.5 * m.profile.scale * pulse, 1);
-    const lockPulse = 1 + Math.sin(t * 12) * 0.08;
-    m.brackets.scale.set(19 * m.profile.scale * lockPulse, 6.6 * m.profile.scale * lockPulse, 1);
-    // Heavy and elite contacts gain a subtle vertical bob so they remain legible
-    // behind dense scenery without looking like friendly portrait badges.
-    m.g.position.y = m.profile.y + e.radius * 1.2 + Math.sin(t * 2.4 + e.phase) * (m.profile.class === 'hostile' ? 0.28 : 0.75);
+    m.frame.material.opacity = isLocked ? 0.18 : imminent ? 0.94 : 0.48;
+    const pulse = 1 + (imminent ? Math.sin(t * 20) * 0.12 : 0);
+    m.frame.scale.set(m.boxSize * pulse, m.boxSize * pulse, 1);
+
+    m.lock.material.opacity = isLocked ? 0.96 : 0;
+    const lockScale = m.boxSize * (1.22 + Math.sin(t * 14) * 0.08);
+    m.lock.scale.set(lockScale, lockScale, 1);
+
+    // Show crisp HP bar once damaged (or on heavy ships / locked targets)
+    const ratio = clamp(e.hp / Math.max(1, e.maxHp), 0, 1);
+    const showHp = (ratio < 1 || isLocked || e.tier === 'heavy') && e.maxHp > 2;
+    m.hpBg.visible = showHp;
+    if (showHp) {
+      if (game?.camera) m.hpBg.quaternion.copy(game.camera.quaternion);
+      m.hpFill.scale.x = Math.max(0.02, 0.95 * ratio);
+      m.hpFill.position.x = -(1 - ratio) * 0.475;
+      m.hpFill.material.color.setHex(ratio > 0.55 ? 0xffb84a : ratio > 0.28 ? 0xff6e3a : 0xff2d4e);
+    }
   }
 
-  /** Compact arrival flair for large task forces; uses the existing fixed particle pools. */
   _formationEntryFx(e, game, kind) {
     if (!game?.particles || !e?.alive) return;
     const p = e.mesh.position;
     if (kind === 'siege') {
-      game.particles.flash(p.x, p.y, p.z, 1.45, 0xff9b62);
-      game.particles.ring(p.x, p.y, p.z, { color: 0xff8246, from: 2, radius: 20, dur: 0.6, opacity: 0.35 });
-      game.particles.emit(p.x, p.y, p.z + 6, { count: 16, speed: 22, vz: 18, color: 0xffbc76, color2: 0x8fbaff, life: 0.52, size: 3.1, drag: 2.1, spread: 2.2 });
+      game.particles.flash(p.x, p.y, p.z, 1.6, 0xff9b62);
+      game.particles.ring(p.x, p.y, p.z, { color: 0xff8246, from: 2, radius: 24, dur: 0.6, opacity: 0.38 });
+      game.particles.emit(p.x, p.y, p.z + 6, { count: 16, speed: 24, vz: 18, color: 0xffbc76, color2: 0x8fbaff, life: 0.52, size: 3.4, drag: 2.1, spread: 2.2 });
       audio.escortLaunch();
     } else if (kind === 'pincer') {
-      game.particles.muzzle(p.x, p.y, p.z + 4, 1.15, 0x8fd8ff);
-      game.particles.emit(p.x, p.y, p.z + 5, { count: 7, speed: 17, vz: 20, color: 0xd9f3ff, color2: 0x579dff, life: 0.32, size: 2.0, drag: 2.8, spread: 0.8 });
+      game.particles.muzzle(p.x, p.y, p.z + 4, 1.25, 0x8fd8ff);
+      game.particles.emit(p.x, p.y, p.z + 5, { count: 7, speed: 18, vz: 20, color: 0xd9f3ff, color2: 0x579dff, life: 0.32, size: 2.2, drag: 2.8, spread: 0.8 });
       audio.pincerPass();
     }
   }
 
-  /** Fire one spectacular but readable Aegis round from a side-specific gun port. */
   _siegeShot(e, player, proj, game, side, type) {
     const p = e.mesh.position;
-    const muzzle = _v2.set(p.x + side * 3.35, p.y + (side ? 0.85 : 0.15), p.z - 10.2).clone();
+    const muzzle = _v2.set(p.x + side * 4.5, p.y + (side ? 1.2 : 0.2), p.z - 14.0).clone();
     const color = type === 'wave' ? 0x95bfff : 0xffa15a;
-    game.particles?.muzzle(muzzle.x, muzzle.y, muzzle.z, type === 'wave' ? 2.3 : 2.0, color);
-    game.particles?.flash(muzzle.x, muzzle.y, muzzle.z, type === 'wave' ? 1.05 : 0.86, color);
-    game.particles?.emit(muzzle.x, muzzle.y, muzzle.z, { count: type === 'wave' ? 12 : 9, speed: type === 'wave' ? 32 : 25, vz: -12, color, color2: 0xffffff, life: 0.36, size: type === 'wave' ? 3.8 : 2.9, drag: 2.6, spread: 0.75 });
-    if (type === 'wave') game.particles?.ring(muzzle.x, muzzle.y, muzzle.z, { color, from: 1.5, radius: 13, dur: 0.28, opacity: 0.46 });
+    game.particles?.muzzle(muzzle.x, muzzle.y, muzzle.z, type === 'wave' ? 2.5 : 2.1, color);
+    game.particles?.flash(muzzle.x, muzzle.y, muzzle.z, type === 'wave' ? 1.15 : 0.92, color);
+    game.particles?.emit(muzzle.x, muzzle.y, muzzle.z, { count: type === 'wave' ? 12 : 9, speed: type === 'wave' ? 32 : 25, vz: -12, color, color2: 0xffffff, life: 0.36, size: type === 'wave' ? 4.0 : 3.0, drag: 2.6, spread: 0.75 });
+    if (type === 'wave') game.particles?.ring(muzzle.x, muzzle.y, muzzle.z, { color, from: 1.5, radius: 14, dur: 0.28, opacity: 0.48 });
     this._aimedShot(e, player, proj, type, type === 'wave' ? 0.92 : 1.18, muzzle);
     audio.siegeBroadside();
   }
 
-  /** Assign a short-lived wingmate target without concentrating all fire on one ally. */
   _assignAllyTarget(e, player, wingmates, dt) {
     const valid = (w) => w && w.hidden <= 0 && w.mesh.visible && w.hp > 0;
     if (!e.forcedWingmate && !ALLY_TARGET_CAPABLE.has(e.type)) {
@@ -973,36 +1230,28 @@ export class Enemies {
       e.allyTargetT = 0.25;
     } else {
       if (e.forcedWingmate && e.forcedWingmate.danger <= 0) e.forcedWingmate = null;
-      // A normal combatant yields its target if another enemy has already
-      // claimed that wingmate this frame. Only the visible rescue pursuer may
-      // overlap, so one support craft cannot be focus-fired without warning.
       if (valid(e.allyTarget) && (e.allyTarget.targetedBy ?? 0) >= 1) e.allyTarget = null;
       e.allyTargetT -= dt;
       if (!valid(e.allyTarget) || e.allyTargetT <= 0) {
         e.allyTarget = null;
         e.allyTargetT = rand(0.85, 1.45);
-        // A wingmate is eligible only in the attack band. This leaves the
-        // player as the primary threat and prevents across-the-map sniping.
-        const inAttackBand = e.mesh.position.z > -470 && e.mesh.position.z < -28;
+        const inAttackBand = e.mesh.position.z > -275 && e.mesh.position.z < -26;
         const candidates = inAttackBand ? wingmates.filter((w) => valid(w)
           && w.danger <= 0 && (w.targetedBy ?? 0) < 1
-          && Math.abs(w.z - e.mesh.position.z) < 300
-          && Math.hypot(w.x - e.mesh.position.x, w.y - e.mesh.position.y) < 300) : [];
-        // Wingmates share meaningful, visible risk while retaining distributed targeting.
-        // The player remains the main target, but allies now receive regular pressure.
-        const allyTargetChance = this.difficultyWave <= 3 ? 0.34 : 0.28;
+          && Math.abs(w.z - e.mesh.position.z) < 220
+          && Math.hypot(w.x - e.mesh.position.x, w.y - e.mesh.position.y) < 220) : [];
+        const allyTargetChance = this.difficultyWave <= 3 ? 0.32 : 0.26;
         if (candidates.length && Math.random() < allyTargetChance) {
           const least = Math.min(...candidates.map((w) => w.targetedBy ?? 0));
           const pool = candidates.filter((w) => (w.targetedBy ?? 0) === least);
           e.allyTarget = pick(pool);
-          e.allyTargetT = rand(2.8, 4.8);
+          e.allyTargetT = rand(2.6, 4.4);
         }
       }
     }
     if (valid(e.allyTarget)) e.allyTarget.targetedBy++;
   }
 
-  /** Current live target position; player remains the default primary objective. */
   _targetPosition(e, player, out = _v1) {
     const w = e.allyTarget;
     return w && w.hidden <= 0 && w.mesh.visible && w.hp > 0
@@ -1010,86 +1259,68 @@ export class Enemies {
       : out.set(player.x, player.y, PLAYER_Z);
   }
 
-  /** Fire a shell while leading either the player or a currently selected wingmate. */
   _aimedShot(e, player, proj, type = 'orb', leadMul = 1, origin = null) {
     const p = origin ?? e.mesh.position;
     const w = e.allyTarget && e.allyTarget.hidden <= 0 && e.allyTarget.mesh.visible && e.allyTarget.hp > 0 ? e.allyTarget : null;
     const target = w ?? player;
     const targetZ = w ? w.z : PLAYER_Z;
-    _v1.set(target.x + (target.vx ?? 0) * 0.12 * leadMul, target.y + (target.vy ?? 0) * 0.08 * leadMul, targetZ).sub(p);
-    // A portion of ally-targeted light fire tracks its assigned support craft.
-    // This makes the visible danger indicator correspond to real, avoidable hits.
+    _v1.set(target.x + (target.vx ?? 0) * 0.11 * leadMul, target.y + (target.vy ?? 0) * 0.08 * leadMul, targetZ).sub(p);
     const shotType = w && (type === 'orb' || type === 'bolt') && Math.random() < 0.55 ? 'homing' : type;
-    proj.fireEnemy(p, _v1.clone(), shotType, null, w);
+    proj.fireEnemy(p, _v1, shotType, null, w);
   }
 
-  /** Animate the bounded visual kit added to imported enemy hulls. */
   _updateCombatVisual(e, dt) {
     const v = e.visual;
     if (!v) return;
     const damage = clamp(1 - e.hp / Math.max(1, e.maxHp), 0, 1);
     const t = e.age;
-    const thrust = 0.88 + Math.sin(t * 18 + e.phase) * 0.08 + damage * 0.12;
+    const thrust = 0.88 + Math.sin(t * 24 + e.phase) * 0.12 + damage * 0.14;
     for (const glow of v.engineGlows) {
       const base = glow.userData.baseScale ?? (glow.userData.baseScale = glow.scale.x);
       glow.scale.setScalar(base * thrust);
-      glow.material.opacity = 0.76 + Math.sin(t * 15 + e.phase) * 0.12;
+      glow.material.opacity = 0.78 + Math.sin(t * 18 + e.phase) * 0.14;
     }
-    for (const collar of v.engineCollars) collar.rotation.z += dt * (1.8 + e.speed * 0.65);
-    const critical = clamp((damage - 0.38) / 0.62, 0, 1);
-    const attackBand = e.mesh.position.z > -470 && e.mesh.position.z < -38;
-    const imminent = attackBand && e.fireCd > 0 && e.fireCd < 0.42;
+    for (const plume of v.enginePlumes) {
+      const len = (e.lingering ? 0.72 : 1.15) * (0.88 + Math.sin(t * 46 + e.phase) * 0.16);
+      plume.scale.set(1, 1, len);
+    }
+    for (const collar of v.engineCollars) collar.rotation.z += dt * (2.0 + e.speed * 0.7);
+    const critical = clamp((damage - 0.35) / 0.65, 0, 1);
+    const attackBand = e.mesh.position.z > -270 && e.mesh.position.z < -30;
+    const imminent = attackBand && e.fireCd > 0 && e.fireCd < 0.45;
     for (const ring of v.sensorRings) {
       const base = ring.userData.baseScale ?? (ring.userData.baseScale = ring.scale.x);
-      ring.rotation.z += dt * (1.5 + e.speed * 1.2 + (imminent ? 4.8 : 0));
-      ring.scale.setScalar(base * (1 + (imminent ? 0.16 : 0.035) * Math.sin(t * (imminent ? 22 : 6) + e.phase)));
-      if (ring.material.emissive) ring.material.emissiveIntensity = imminent ? 1.85 : 0.45 + damage * 0.42;
+      ring.rotation.z += dt * (1.8 + e.speed * 1.2 + (imminent ? 5.6 : 0));
+      ring.scale.setScalar(base * (1 + (imminent ? 0.22 : 0.04) * Math.sin(t * (imminent ? 26 : 6) + e.phase)));
+      if (ring.material.emissive) ring.material.emissiveIntensity = imminent ? 2.2 : 0.55 + damage * 0.45;
     }
     for (const weapon of v.weaponGlows) {
       const base = weapon.userData.baseScale ?? (weapon.userData.baseScale = weapon.scale.x);
-      const pulse = imminent ? 0.72 + Math.max(0, Math.sin(t * 24 + e.phase)) * 0.28 : 0.30 + damage * 0.18;
+      const pulse = imminent ? 0.82 + Math.max(0, Math.sin(t * 28 + e.phase)) * 0.18 : 0.28 + damage * 0.18;
       weapon.material.opacity = pulse;
-      weapon.scale.setScalar(base * (1 + (imminent ? 0.34 : 0.06) * Math.sin(t * (imminent ? 20 : 5) + e.phase)));
+      weapon.scale.setScalar(base * (1 + (imminent ? 0.48 : 0.06) * Math.sin(t * (imminent ? 24 : 5) + e.phase)));
     }
     for (const warning of v.warningLights) {
       const base = warning.userData.baseScale ?? (warning.userData.baseScale = warning.scale.x);
-      warning.material.opacity = critical * (0.34 + Math.max(0, Math.sin(t * 11 + e.phase)) * 0.62);
-      warning.scale.setScalar(base * (1 + critical * 0.26));
+      warning.material.opacity = critical * (0.38 + Math.max(0, Math.sin(t * 13 + e.phase)) * 0.60);
+      warning.scale.setScalar(base * (1 + critical * 0.30));
     }
-    // Reactor, cooling fins and muzzle cage telegraph the firing moment without
-    // creating particles. This is transform/material work on only elite models.
     for (const core of v.reactorCores) {
       const base = core.userData.baseScale ?? (core.userData.baseScale = core.scale.x);
-      const energy = imminent ? 1 : 0.48 + damage * 0.36;
-      core.rotation.y += dt * (1.6 + energy * 5.0);
-      core.scale.setScalar(base * (1 + energy * 0.16 + Math.sin(t * 9 + e.phase) * 0.035));
-      if (core.material.emissive) core.material.emissiveIntensity = 0.42 + energy * 1.15;
+      const energy = imminent ? 1 : 0.52 + damage * 0.38;
+      core.rotation.y += dt * (1.8 + energy * 5.0);
+      core.scale.setScalar(base * (1 + energy * 0.18));
+      if (core.material.emissive) core.material.emissiveIntensity = 0.55 + energy * 1.2;
     }
     for (const halo of v.reactorHalos) {
-      halo.rotation.z += dt * (0.8 + (imminent ? 4.1 : 1.2));
-      if (halo.material.emissive) halo.material.emissiveIntensity = imminent ? 1.45 : 0.34 + damage * 0.32;
-    }
-    for (const vane of v.heatVanes) {
-      vane.rotation.z += dt * (0.18 + damage * 0.28);
-      if (vane.material.emissive) vane.material.emissiveIntensity = 0.14 + (imminent ? 0.6 : damage * 0.24);
-    }
-    for (const vane of v.dataVanes) {
-      vane.rotation.z += dt * (0.20 + (imminent ? 1.45 : damage * 0.35));
-      if (vane.material.emissive) vane.material.emissiveIntensity = imminent ? 0.82 : 0.10 + damage * 0.20;
-    }
-    for (const muzzle of v.muzzleCages) {
-      muzzle.rotation.z += dt * (imminent ? 4.4 : 0.45);
-      if (muzzle.material.emissive) muzzle.material.emissiveIntensity = imminent ? 1.2 : 0.22 + damage * 0.25;
-    }
-    for (const plate of v.armourPlates) {
-      if (plate.material.emissive) plate.material.emissiveIntensity = 0.10 + critical * (0.16 + Math.max(0, Math.sin(t * 7)) * 0.18);
+      halo.rotation.z += dt * (0.9 + (imminent ? 4.4 : 1.3));
+      if (halo.material.emissive) halo.material.emissiveIntensity = imminent ? 1.65 : 0.45 + damage * 0.35;
     }
     if (v.damageSmoke) {
-      v.damageSmoke.material.opacity = critical * (0.12 + Math.max(0, Math.sin(t * 4 + e.phase)) * 0.25);
-      v.damageSmoke.scale.set((v.damageSmoke.userData.baseX ?? (v.damageSmoke.userData.baseX = v.damageSmoke.scale.x)) * (1 + critical * 0.22), (v.damageSmoke.userData.baseY ?? (v.damageSmoke.userData.baseY = v.damageSmoke.scale.y)) * (1 + critical * 0.36), 1);
-      v.damageSmoke.position.x = Math.sin(t * 3.4 + e.phase) * (0.3 + damage * 0.7);
-      v.damageSmoke.position.y += dt * 0.30;
-      if (v.damageSmoke.position.y > 6) v.damageSmoke.position.y = 2.4;
+      v.damageSmoke.material.opacity = critical * (0.22 + Math.max(0, Math.sin(t * 5 + e.phase)) * 0.34);
+      v.damageSmoke.position.x = Math.sin(t * 3.8 + e.phase) * (0.4 + damage * 0.8);
+      v.damageSmoke.position.y += dt * 0.35;
+      if (v.damageSmoke.position.y > 7) v.damageSmoke.position.y = 2.6;
     }
   }
 
@@ -1101,9 +1332,10 @@ export class Enemies {
             n.userData._em = n.material.emissive.getHex();
             n.userData._emi = n.material.emissiveIntensity;
             n.material = n.material.clone();
+            n.material.userData = { ...(n.material.userData || {}), shared: false, _clonedMat: true };
           }
           n.material.emissive.setHex(0xffffff);
-          n.material.emissiveIntensity = 0.9;
+          n.material.emissiveIntensity = 1.15;
         } else if (n.userData._em !== undefined) {
           n.material.emissive.setHex(n.userData._em);
           n.material.emissiveIntensity = n.userData._emi;
@@ -1113,21 +1345,64 @@ export class Enemies {
   }
 
   hit(e, dmg) {
+    if (e.dying) return false;
     e.hp -= dmg;
-    e.flash = 0.13;
+    e.flash = 0.12;
+    e.recoil = 1.0;
+    e.hitSpin = (Math.random() < 0.5 ? -1 : 1) * rand(0.6, 1.0);
+    // Physical knockback kick on impact + reactive evasive snap-roll on surviving agile fighters!
+    if (!e.ground) {
+      e.mesh.position.z -= e.tier === 'heavy' ? 0.9 : 2.1;
+      if (e.hp > 0 && e.tier !== 'heavy' && e.type !== 'pod' && e.type !== 'mine' && e.evadeT <= 0 && Math.random() < 0.72) {
+        e.evadeT = 0.52;
+        e.evadeDir = e.mesh.position.x > 0 ? -1 : 1;
+        if (Math.random() < 0.35) e.evadeDir = -e.evadeDir;
+        e.evadeSpin = e.evadeDir * TAU;
+      }
+    }
     this._setFlash(e, true);
     return e.hp <= 0;
   }
 
+  /**
+   * Kick off a snappy, dramatic Star Fox flaming death spiral for airborne craft
+   * before their final explosive breakup! Score & combo register immediately so
+   * combat pacing stays ultra-responsive.
+   */
+  beginDying(e, scored = true) {
+    if (!e.alive || e.dying) return false;
+    if (scored) this.killCount++;
+    e.dying = true;
+    e.hp = 0;
+    if (e.marker) e.marker.g.visible = false;
+    e.deathT = e.tier === 'heavy' ? 0.52 : 0.32;
+    e.deathVel = new THREE.Vector3(rand(-22, 22), rand(-4, 12), rand(18, 42));
+    e.deathSpin = new THREE.Vector3(rand(-5, 5), rand(-4, 4), (Math.random() < 0.5 ? -1 : 1) * rand(9, 15));
+    e.smokeCd = 0;
+    this._setFlash(e, true);
+    return true;
+  }
+
   kill(e, scored = true) {
     if (!e.alive) return;
-    if (scored) this.killCount++;
+    if (scored && !e.dying) this.killCount++;
     this.remove(e);
   }
 
   remove(e) {
     e.alive = false;
+    e.dying = false;
     this.scene.remove(e.mesh);
+    // Dispose per-enemy cloned hit-flash materials, marker materials & procedural geometry (preserves shared GLB templates!)
+    e.mesh.traverse((n) => {
+      if (n.geometry && !n.geometry.userData?.shared) n.geometry.dispose?.();
+      if (n.material) {
+        const mats = Array.isArray(n.material) ? n.material : [n.material];
+        for (const m of mats) {
+          if (m && !m.userData?.shared) m.dispose?.();
+        }
+      }
+    });
     const i = this.list.indexOf(e);
     if (i >= 0) this.list.splice(i, 1);
   }
@@ -1135,6 +1410,7 @@ export class Enemies {
   clear() {
     for (const e of [...this.list]) this.remove(e);
     this.queue.length = 0;
-    this.eliteTimer = rand(7, 11);
+    this._pendingShots.length = 0;
+    this.eliteTimer = rand(5.5, 9.0);
   }
 }

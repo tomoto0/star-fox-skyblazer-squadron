@@ -25,6 +25,8 @@ export class Atmosphere {
     this.time = 0;
     this._ambientAccumulator = 0;
     this._ambientInterval = 1 / 30;
+    this._hazeLimit = 26;
+    this._motesEnabled = true;
 
     const loader = new THREE.TextureLoader();
     this.tex = {
@@ -78,6 +80,30 @@ export class Atmosphere {
       this.group.add(s);
       this.rift.push(s);
     }
+
+    // Star Fox slipstream speed lines rushing past the periphery (STAR_FOX_3.jpeg)
+    const nLines = 36;
+    const linePos = new Float32Array(nLines * 2 * 3);
+    this.speedLineSeeds = [];
+    for (let i = 0; i < nLines; i++) {
+      const a = (i / nLines) * TAU + rand(-0.15, 0.15);
+      const r = rand(38, 128);
+      const z = rand(-340, 60);
+      const len = rand(14, 30);
+      this.speedLineSeeds.push({ x: Math.cos(a) * r, y: 26 + Math.sin(a) * r * 0.52, z, len, spd: rand(1.9, 3.2) });
+      linePos[i * 6] = Math.cos(a) * r; linePos[i * 6 + 1] = 26 + Math.sin(a) * r * 0.52; linePos[i * 6 + 2] = z;
+      linePos[i * 6 + 3] = Math.cos(a) * r; linePos[i * 6 + 4] = 26 + Math.sin(a) * r * 0.52; linePos[i * 6 + 5] = z + len;
+    }
+    this.speedGeo = new THREE.BufferGeometry();
+    this.speedGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
+    this.speedMat = new THREE.LineBasicMaterial({
+      color: 0xeaf7ff, transparent: true, opacity: 0.22,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    });
+    this.speedLines = new THREE.LineSegments(this.speedGeo, this.speedMat);
+    this.speedLines.frustumCulled = false;
+    this.scene.add(this.speedLines);
+
     this.setStage(1, this.zone);
   }
 
@@ -106,7 +132,7 @@ export class Atmosphere {
       s.userData.speed = p.drift * rand(0.38, 1.0) * (farBand ? 0.22 : midBand ? 0.45 : 0.72);
       s.userData.band = farBand ? 0 : midBand ? 1 : 2;
       s.userData.width = width;
-      s.visible = true;
+      s.visible = i < this._hazeLimit;
     }
 
     for (let i = 0; i < this.moteSize.length; i++) {
@@ -140,11 +166,41 @@ export class Atmosphere {
   }
 
   setAmbientRate(hz = 30) {
-    this._ambientInterval = 1 / clamp(hz, 15, 60);
+    this._ambientInterval = 1 / clamp(hz, 10, 60);
   }
 
-  update(dt, scroll) {
+  /** Trim heavy translucent haze overdraw on lightweight quality presets */
+  setDetail({ hazeCount = 26, motesEnabled = true } = {}) {
+    this._hazeLimit = clamp(hazeCount | 0, 0, this.haze.length);
+    this._motesEnabled = !!motesEnabled;
+    for (let i = 0; i < this.haze.length; i++) this.haze[i].visible = i < this._hazeLimit;
+    if (this.motes) this.motes.visible = this._motesEnabled;
+  }
+
+  update(dt, scroll, player = null) {
     this.time += dt;
+    // Full-rate slipstream speed lines amplify velocity & boost feel!
+    if (this.speedLines) {
+      const arr = this.speedGeo.attributes.position.array;
+      const boostFactor = clamp((scroll - 40) / 48, 0, 1.3);
+      this.speedMat.opacity = 0.14 + boostFactor * 0.28;
+      const cx = player ? player.x : 0;
+      const cy = player ? player.y + 4 : 20;
+      for (let i = 0; i < this.speedLineSeeds.length; i++) {
+        const l = this.speedLineSeeds[i];
+        l.z += scroll * dt * l.spd * (1 + boostFactor * 0.7);
+        if (l.z > 48) {
+          l.z = -280 - Math.random() * 140;
+          const a = rand(TAU), r = rand(36, 124);
+          l.x = Math.cos(a) * r;
+          l.y = Math.sin(a) * r * 0.55;
+        }
+        const streakLen = l.len * (1 + boostFactor * 1.15);
+        arr[i * 6] = cx + l.x; arr[i * 6 + 1] = Math.max(4, cy + l.y); arr[i * 6 + 2] = l.z;
+        arr[i * 6 + 3] = cx + l.x; arr[i * 6 + 4] = Math.max(4, cy + l.y); arr[i * 6 + 5] = l.z + streakLen;
+      }
+      this.speedGeo.attributes.position.needsUpdate = true;
+    }
     this._ambientAccumulator += dt;
     if (this._ambientAccumulator < this._ambientInterval) return;
     const ambientDt = this._ambientAccumulator;

@@ -1,41 +1,51 @@
 import * as THREE from 'three';
 import { buildArwing } from './shipFactory.js';
+import { flightRoute } from '../world/terrain.js';
 import { audio } from '../core/audio.js';
 import { dotTexture, rand, pick, clamp, damp, TAU, _v1 } from '../core/util.js';
 import { PLAYER_Z } from './player.js';
 
-/* Star Fox-style wingmates — each with a distinct self-driving AI. They hold
- * formation, break off to engage enemies with their own lasers (and the odd
- * bomb run), get chased ("on my tail!"), and can be rescued for a bonus. */
+function routeAt(game, worldZ) {
+  const zoneId = game?.zone?.id;
+  const chunks = game?.terrain?.chunks;
+  if (chunks && chunks.length) {
+    for (let i = 0; i < chunks.length; i++) {
+      const ch = chunks[i];
+      const cz = ch.position.z;
+      if (worldZ <= cz + 12 && worldZ >= cz - 312) {
+        return flightRoute(zoneId, ch.userData.virtualZ + (worldZ - cz));
+      }
+    }
+  }
+  return { center: 0, halfWidth: 74 };
+}
 
-/* Each wingmate flies its OWN patrol — it roves the forward airspace on
- * autonomous waypoints (never mirroring the player's x/y), with a personality:
- *  - yBand/zBand: the altitude + depth band it prefers (z relative to PLAYER_Z)
- *  - xStyle: how it chooses lateral waypoints ('sweep' = cross to the far side,
- *            'weave' = drift around a zone, 'rove' = roam anywhere)
- *  - special: its signature move ('barrage' rapid stream / 'volley' cover fan /
- *            'loopbomb' looping bomb run)                                     */
+/* Star Fox-style wingmates — each with a distinct airframe variant, contrails,
+ * and self-driving patrol AI flying visibly alongside the player in formation. */
+
+const TRAIL_LEN = 18;
+
 const TEAM = [
-  { // VEGA — hot-headed hunter: low, fast, screams across the field chasing kills
-    name: 'VEGA', wing: 0x2f6fd6, engine: 0x66d9ff, color: 0x66d9ff, role: 'point',
-    yBand: [8, 62], zBand: [-95, -40], xStyle: 'sweep', wpInt: [1.4, 2.6], pace: 2.7,
-    weaveX: 10, weaveY: 5, weaveFx: 1.9, weaveFy: 2.4,
-    engageChance: 0.78, fireGap: [0.4, 0.8], burstChance: 0.55,
-    bombCd: [16, 26], special: 'barrage', specialCd: [13, 20],
+  { // VEGA — cobalt forward-swept hunter: low, fast, sweeps close across the front
+    name: 'VEGA', variant: 'hunter', wing: 0x2b74e8, darkWing: 0x183c82, engine: 0x5ae0ff, color: 0x66d9ff, role: 'point',
+    yBand: [10, 48], zBand: [-86, -34], xStyle: 'sweep', wpInt: [1.3, 2.4], pace: 2.8,
+    weaveX: 12, weaveY: 5, weaveFx: 1.9, weaveFy: 2.3,
+    engageChance: 0.80, fireGap: [0.42, 0.78], burstChance: 0.55,
+    bombCd: [15, 24], special: 'barrage', specialCd: [12, 19],
   },
-  { // NOVA — disciplined guardian: mid altitude, tight defensive weave, screens
-    name: 'NOVA', wing: 0x35a85a, engine: 0x8bffb0, color: 0x8bffb0, role: 'escort',
-    yBand: [10, 46], zBand: [-62, -18], xStyle: 'weave', wpInt: [2.0, 3.4], pace: 2.1,
-    weaveX: 14, weaveY: 4, weaveFx: 1.0, weaveFy: 1.3,
-    engageChance: 0.42, fireGap: [0.6, 1.1], burstChance: 0.3,
-    bombCd: [22, 34], special: 'volley', specialCd: [16, 26],
+  { // NOVA — emerald twin-boom guardian: mid altitude, disciplined flank cover
+    name: 'NOVA', variant: 'escort', wing: 0x2eb864, darkWing: 0x196838, engine: 0x7affb2, color: 0x8bffb0, role: 'escort',
+    yBand: [12, 42], zBand: [-58, -20], xStyle: 'weave', wpInt: [1.8, 3.0], pace: 2.2,
+    weaveX: 14, weaveY: 4, weaveFx: 1.1, weaveFy: 1.4,
+    engageChance: 0.48, fireGap: [0.58, 1.05], burstChance: 0.34,
+    bombCd: [20, 32], special: 'volley', specialCd: [15, 24],
   },
-  { // KIT — playful ace: soars high, loops + dives, roams wide, loves bombs
-    name: 'KIT', wing: 0xd8a53a, engine: 0xffd66b, color: 0xffd66b, role: 'cover',
-    yBand: [42, 150], zBand: [-125, -48], xStyle: 'rove', wpInt: [1.3, 2.5], pace: 2.4,
-    weaveX: 18, weaveY: 12, weaveFx: 1.1, weaveFy: 1.45,
-    engageChance: 0.58, fireGap: [0.55, 1.0], burstChance: 0.5,
-    bombCd: [10, 16], special: 'loopbomb', specialCd: [12, 19],
+  { // KIT — golden gull-wing ace: high agile sweeps, dives & barrel-loop bomb runs
+    name: 'KIT', variant: 'ace', wing: 0xebaa2c, darkWing: 0x996412, engine: 0xffe06b, color: 0xffd66b, role: 'cover',
+    yBand: [26, 74], zBand: [-94, -40], xStyle: 'rove', wpInt: [1.2, 2.3], pace: 2.5,
+    weaveX: 18, weaveY: 10, weaveFx: 1.2, weaveFy: 1.5,
+    engageChance: 0.62, fireGap: [0.52, 0.95], burstChance: 0.52,
+    bombCd: [10, 16], special: 'loopbomb', specialCd: [12, 18],
   },
 ];
 
@@ -45,9 +55,6 @@ const PORTRAITS = {
   KIT: './assets/ui/portrait_kit.png',
 };
 
-// Short, conversational radio calls. Every bank is speaker-specific so the
-// player learns who is talking from the wording before looking at the portrait.
-// Keep lines compact: the HUD types at 42 characters per second during combat.
 const COMMS = {
   ambient: {
     VEGA: [
@@ -77,7 +84,7 @@ const COMMS = {
   bombRun: {
     VEGA: ['Making a run. Clear the front!', 'Bomb out. Keep your distance.', "I'm cracking the formation open!"],
     NOVA: ['Dropping ordnance on the cluster. Give it room.', 'Marking the pack. Bomb away.', 'Opening a safe lane now.'],
-    KIT: ['Big delivery coming through! Give me some space.', "Looping in with a present.", "Heads up — this one's going to be loud!"],
+    KIT: ['Big delivery coming through! Give me some space.', 'Looping in with a present.', "Heads up — this one's going to be loud!"],
   },
   barrage: {
     VEGA: ['Covering fire going out. Push through!', "I'm pinning them down — take the opening!", 'Barrage on the lead formation!'],
@@ -116,21 +123,20 @@ class Wingmate {
     this.def = def;
     this.name = def.name;
     this.color = def.color;
-    this.mesh = buildArwing({ wing: def.wing, engine: def.engine });
-    this.mesh.scale.setScalar(0.62);
+    this.mesh = buildArwing({ wing: def.wing, darkWing: def.darkWing, engine: def.engine, variant: def.variant });
+    // Peer-sized squadron fighters so ally craft read boldly alongside the player!
+    this.mesh.scale.setScalar(0.96);
     scene.add(this.mesh);
 
-    // Always-visible visual IFF: a colored roundel and the pilot portrait ride above
-    // each wingmate. Sprites face the camera, keeping friendly identity legible while
-    // the aircraft banks, dives, and crosses the player's line of sight.
+    // Sleek, compact IFF portrait badge so it identifies the pilot without dwarfing the 3D craft.
     const portraitTexture = new THREE.TextureLoader().load(PORTRAITS[this.name]);
     portraitTexture.colorSpace = THREE.SRGBColorSpace;
     this.portraitRoundel = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: dotTexture(), color: this.color, transparent: true, opacity: 0.96,
+      map: dotTexture(), color: this.color, transparent: true, opacity: 0.92,
       depthTest: false, depthWrite: false, fog: false,
     }));
-    this.portraitRoundel.scale.set(21, 21, 1);
-    this.portraitRoundel.position.set(0, 20, 0);
+    this.portraitRoundel.scale.set(10.5, 10.5, 1);
+    this.portraitRoundel.position.set(0, 9.8, 0);
     this.portraitRoundel.renderOrder = 90;
     this.mesh.add(this.portraitRoundel);
 
@@ -138,26 +144,26 @@ class Wingmate {
       map: portraitTexture, color: 0xffffff, transparent: true,
       depthTest: false, depthWrite: false, fog: false,
     }));
-    this.portrait.scale.set(16, 16, 1);
-    this.portrait.position.set(0, 20, 0.1);
+    this.portrait.scale.set(8.2, 8.2, 1);
+    this.portrait.position.set(0, 9.8, 0.1);
     this.portrait.renderOrder = 91;
     this.mesh.add(this.portrait);
 
-    // "help!" marker
     this.marker = new THREE.Sprite(new THREE.SpriteMaterial({
       map: dotTexture(), color: 0xff3b52, transparent: true, opacity: 0,
       blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
     }));
-    this.marker.scale.setScalar(6);
+    this.marker.scale.setScalar(7.5);
     this.mesh.add(this.marker);
-    this.marker.position.set(0, 5, 0);
-    // muzzle (nose) glow so their shots read
+    this.marker.position.set(0, 4.8, 0);
+
+    this._buildTrails();
+
     this.phase = rand(TAU);
     this.danger = 0; this.hidden = 0;
-    this.state = 'form'; this.engageT = 0; this.fireCd = rand(0.4, 1.2);
-    // start somewhere inside its own patrol band (not glued to the player)
-    this.x = rand(-90, 90);
-    this.y = clamp((def.yBand[0] + def.yBand[1]) / 2, 8, 160);
+    this.state = 'form'; this.engageT = 0; this.fireCd = rand(0.4, 1.1);
+    this.x = rand(-65, 65);
+    this.y = clamp((def.yBand[0] + def.yBand[1]) / 2, 10, 72);
     this.z = PLAYER_Z + (def.zBand[0] + def.zBand[1]) / 2;
     this.wp = new THREE.Vector3(this.x, this.y, this.z);
     this.wpT = rand(0, 1.2);
@@ -165,19 +171,75 @@ class Wingmate {
     this.specialCd = rand(def.specialCd[0], def.specialCd[1]) * 0.6;
     this._loopT = 0;
     this.hp = 100; this.maxHp = 100;
-    // Combat damage is event-based and briefly rate-limited. This prevents a
-    // dense burst from deleting one wingmate's HP in a single visual instant.
     this.damageCooldown = 0;
     this.damageFlash = 0;
     this.targetedBy = 0;
     this.lastDamage = '';
     this.lastComms = '';
-    this.vx = 0; this.vy = 0; this.vz = 0;   // smooth flight velocity
+    this.vx = 0; this.vy = 0; this.vz = 0;
+    this._avoidBank = 0;
+    this._burstQueue = [];
+  }
+
+  _buildTrails() {
+    this.trails = [];
+    for (const tip of [this.mesh.userData.tipL, this.mesh.userData.tipR]) {
+      const geo = new THREE.BufferGeometry();
+      const posArr = new Float32Array(TRAIL_LEN * 2 * 3);
+      geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+      const alphaArr = new Float32Array(TRAIL_LEN * 2);
+      geo.setAttribute('aAlpha', new THREE.BufferAttribute(alphaArr, 1));
+      const idx = [];
+      for (let i = 0; i < TRAIL_LEN - 1; i++) {
+        const a = i * 2, b = i * 2 + 1, c = i * 2 + 2, d = i * 2 + 3;
+        idx.push(a, b, c, b, d, c);
+      }
+      geo.setIndex(idx);
+      const col = new THREE.Color(this.color).lerp(new THREE.Color(0xffffff), 0.68);
+      const mat = new THREE.ShaderMaterial({
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+        uniforms: { uColor: { value: col }, uOpacity: { value: 0.42 } },
+        vertexShader: `attribute float aAlpha; varying float vA; void main(){ vA = aAlpha; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+        fragmentShader: `uniform vec3 uColor; uniform float uOpacity; varying float vA; void main(){ gl_FragColor = vec4(uColor, vA * uOpacity); }`,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      this.trails.push({ tip, mesh, hist: [] });
+    }
+  }
+
+  _setTrailsVisible(v) {
+    for (const tr of this.trails) {
+      tr.mesh.visible = v;
+      if (!v) tr.hist.length = 0;
+    }
+  }
+
+  _updateTrails() {
+    for (const tr of this.trails) {
+      tr.mesh.visible = this.mesh.visible;
+      if (!this.mesh.visible) continue;
+      tr.tip.getWorldPosition(_v1);
+      tr.hist.unshift({ x: _v1.x, y: _v1.y, z: _v1.z });
+      if (tr.hist.length > TRAIL_LEN) tr.hist.pop();
+      const pa = tr.mesh.geometry.attributes.position.array;
+      const aa = tr.mesh.geometry.attributes.aAlpha.array;
+      for (let i = 0; i < TRAIL_LEN; i++) {
+        const p = tr.hist[Math.min(i, tr.hist.length - 1)];
+        const w = 0.08 + (i / TRAIL_LEN) * 0.65;
+        pa[i * 6] = p.x; pa[i * 6 + 1] = p.y - w / 2; pa[i * 6 + 2] = p.z + i * 1.15;
+        pa[i * 6 + 3] = p.x; pa[i * 6 + 4] = p.y + w / 2; pa[i * 6 + 5] = p.z + i * 1.15;
+        const a = 1 - i / TRAIL_LEN;
+        aa[i * 2] = aa[i * 2 + 1] = a * a;
+      }
+      tr.mesh.geometry.attributes.position.needsUpdate = true;
+      tr.mesh.geometry.attributes.aAlpha.needsUpdate = true;
+    }
   }
 
   get pos() { return this.mesh.position; }
 
-  /** Say a speaker-specific line without immediately repeating the last call. */
   comms(game, category, dur = 2.4) {
     const options = COMMS[category]?.[this.name] ?? [];
     if (!options.length) return '';
@@ -188,22 +250,21 @@ class Wingmate {
     return text;
   }
 
-  /** knocked out of the fight — retreat, repair, rejoin */
   shotDown(game) {
     if (this.hidden > 0) return;
     this.danger = 0;
+    this._burstQueue.length = 0;
     this.marker.material.opacity = 0;
     this.hidden = rand(8, 12);
     this.hp = 6;
     game.particles.explosion(this.x, this.y, this.z, false);
     this.comms(game, 'retreat', 2.8);
   }
-  /** 'down' (shot down / regrouping), 'danger' (bandit on tail), 'targeted', or 'ok' */
+
   get statusState() {
     return this.hidden > 0 ? 'down' : this.danger > 0 ? 'danger' : this.targetedBy > 0 ? 'targeted' : 'ok';
   }
 
-  /** Receive a real enemy hit; returns true only when damage was accepted. */
   takeDamage(amount, game, source = 'enemy') {
     if (this.hidden > 0 || this.damageCooldown > 0 || this.hp <= 0) return false;
     this.hp = Math.max(0, this.hp - Math.max(1, amount));
@@ -214,22 +275,29 @@ class Wingmate {
     return true;
   }
 
-  /** pick the nearest engageable enemy ahead of this wingmate */
   _target(enemies) {
-    let best = null, bd = this.def.role === 'cover' ? 320 : 260;
+    let best = null, bd = this.def.role === 'cover' ? 280 : 230;
     for (const e of enemies.list) {
+      if (e.dying) continue;
       const ez = e.mesh.position.z;
-      if (ez > this.z + 6 || ez < -600) continue;              // must be ahead
-      if (this.def.role === 'cover' && e.mesh.position.y < 26) continue; // KIT prefers high targets
-      const d = Math.hypot(e.mesh.position.x - this.x, e.mesh.position.y - this.y) + Math.abs(ez - this.z) * 0.4;
+      if (ez > this.z + 6 || ez < -360) continue;
+      if (this.def.role === 'cover' && e.mesh.position.y < 18) continue;
+      const d = Math.hypot(e.mesh.position.x - this.x, e.mesh.position.y - this.y) + Math.abs(ez - this.z) * 0.45;
       if (d < bd) { bd = d; best = e; }
     }
     return best;
   }
 
   update(dt, player, enemies, proj, game) {
-    // HP changes only from actual impacts or the explicit unresolved rescue
-    // consequence below. A tail warning must not silently drain 15 HP/s.
+    // Pause-safe queued wingmate laser bursts
+    for (let i = this._burstQueue.length - 1; i >= 0; i--) {
+      const q = this._burstQueue[i];
+      q.t -= dt;
+      if (q.t <= 0) {
+        this._burstQueue.splice(i, 1);
+        if (this.hidden <= 0) q.fn();
+      }
+    }
     this.damageCooldown = Math.max(0, this.damageCooldown - dt);
     this.damageFlash = Math.max(0, this.damageFlash - dt);
     if (this.hidden > 0) this.hp = Math.min(this.maxHp, this.hp + 11 * dt);
@@ -238,6 +306,7 @@ class Wingmate {
     if (this.hidden > 0) {
       this.hidden -= dt;
       this.mesh.visible = false;
+      this._setTrailsVisible(false);
       if (this.hidden <= 0) { this.mesh.visible = true; this.comms(game, 'rejoin', 2.4); }
       return;
     }
@@ -245,68 +314,133 @@ class Wingmate {
     const t = performance.now() * 0.001;
     const d = this.def;
 
-    // ---- decide state ----
     if (this.state === 'form') {
       this.engageT -= dt;
       if (this.engageT <= 0) {
-        this.engageT = rand(1.5, 3.5);
+        this.engageT = rand(1.3, 3.0);
         if (this.danger <= 0 && Math.random() < d.engageChance) {
           this.engaged = this._target(enemies);
-          if (this.engaged) { this.state = 'engage'; this.engageDur = rand(2.2, 4.0); }
+          if (this.engaged) { this.state = 'engage'; this.engageDur = rand(2.2, 3.8); }
         }
       }
-    } else { // engage
+    } else {
       this.engageDur -= dt;
-      if (!this.engaged || !this.engaged.alive || this.engageDur <= 0 || this.danger > 0) {
+      if (!this.engaged || !this.engaged.alive || this.engaged.dying || this.engageDur <= 0 || this.danger > 0) {
         this.state = 'form'; this.engaged = null;
       }
     }
 
-    // ---- movement target: OWN patrol waypoints (never mirrors the player) ----
     let tx, ty, tz, lag;
+    const floorMin = Math.max(8.5, (game?.zone?.floorY ?? 0) + 8.5);
     if (this.state === 'engage' && this.engaged) {
-      // dive onto the bandit's lane and press the attack
       const ep = this.engaged.mesh.position;
-      tx = clamp(ep.x + Math.sin(t * 3 + this.phase) * 12, -245, 245);
-      ty = clamp(ep.y + (d.role === 'cover' ? 10 : rand(-2, 6)), 8, 168);
-      tz = clamp(ep.z + 34, PLAYER_Z + d.zBand[0] - 30, PLAYER_Z - 8);
-      lag = d.pace * 1.7;
+      tx = clamp(ep.x + Math.sin(t * 3 + this.phase) * 14, -155, 155);
+      ty = clamp(ep.y + (d.role === 'cover' ? 9 : rand(-2, 6)), floorMin, 92);
+      tz = clamp(ep.z + 32, PLAYER_Z + d.zBand[0] - 20, PLAYER_Z - 8);
+      lag = d.pace * 1.75;
     } else {
-      // roam its own patrol band; pick a fresh autonomous waypoint on a timer
       this.wpT -= dt;
-      if (this.wpT <= 0) { this.wpT = rand(d.wpInt[0], d.wpInt[1]); this._pickWaypoint(); }
+      if (this.wpT <= 0) { this.wpT = rand(d.wpInt[0], d.wpInt[1]); this._pickWaypoint(player, game); }
       tx = this.wp.x + Math.sin(t * d.weaveFx + this.phase) * d.weaveX;
-      ty = clamp(this.wp.y + Math.sin(t * d.weaveFy + this.phase * 1.7) * d.weaveY, 6, 175);
+      ty = clamp(this.wp.y + Math.sin(t * d.weaveFy + this.phase * 1.7) * d.weaveY, floorMin, 92);
       tz = this.wp.z + Math.sin(t * 0.7 + this.phase) * 6;
       lag = d.pace;
     }
-    // steer like a real plane: capped speed + smooth acceleration — the ship
-    // TRAVELS to distant waypoints instead of exponential-snapping onto them
-    const maxV = (48 + d.pace * 15) * (this.state === 'engage' ? 1.1 : 1);
-    this.vx = damp(this.vx, clamp((tx - this.x) * lag, -maxV, maxV), 5, dt);
-    this.vy = damp(this.vy, clamp((ty - this.y) * lag, -maxV * 0.75, maxV * 0.75), 5, dt);
-    this.vz = damp(this.vz, clamp((tz - this.z) * lag, -maxV * 0.6, maxV * 0.6), 5, dt);
+
+    // ---- Predictive 3D obstacle avoidance (rocks, cliffs, arches, towers & artificial structures) ----
+    let avoidX = 0, avoidY = 0, avoidWeight = 0;
+    const route = routeAt(game, this.z);
+    if (game?.forEachWorldObstacle) {
+      game.forEachWorldObstacle((cx, cy, cz, rh, hy) => {
+        const dzAhead = this.z - cz; // > 0 when obstacle is ahead approaching the wingmate
+        if (dzAhead < -20 || dzAhead > 76) return;
+        const padH = rh + 17.5;
+        const dx = this.x - cx;
+        const absDx = Math.abs(dx);
+        if (absDx >= padH) return;
+        const minY = cy - hy - 8.5;
+        const maxY = cy + hy + 11.5;
+        if (this.y < minY || this.y > maxY) return;
+
+        const zUrg = dzAhead >= 0 ? clamp(1 - dzAhead / 76, 0.14, 1) : clamp(1 + dzAhead / 20, 0.08, 1);
+        const xUrg = clamp(1 - absDx / padH, 0.10, 1);
+        const w = zUrg * (0.45 + 0.55 * xUrg);
+        const topClearY = cy + hy + 10.5;
+        // Climb gracefully over low rocks/decks; bank sharply toward the open route around tall cliffs/towers.
+        if (topClearY <= 92 && (this.y >= cy + hy * 0.22 || (topClearY - this.y) < 17)) {
+          avoidY += (topClearY - this.y + 9.5) * w * 2.3;
+          const slipDir = absDx > 2.5 ? Math.sign(dx) : (Math.sign(route.center - cx) || (this.phase > Math.PI ? 1 : -1));
+          avoidX += slipDir * 14 * w;
+        } else {
+          const dir = absDx > 3.2 ? Math.sign(dx) : (Math.sign(route.center - cx) || (this.phase > Math.PI ? 1 : -1));
+          avoidX += dir * (padH - absDx + 20) * w * 2.7;
+          if (this.y < floorMin + 9) avoidY += 15 * w;
+        }
+        if (w > avoidWeight) avoidWeight = w;
+      });
+    }
+    avoidX = clamp(avoidX, -145, 145);
+    avoidY = clamp(avoidY, -46, 84);
+
+    const baseMaxV = (52 + d.pace * 16) * (this.state === 'engage' ? 1.12 : 1);
+    const maxV = baseMaxV * (1 + avoidWeight * 0.52);
+    const resp = 5 + avoidWeight * 8.5;
+    this.vx = damp(this.vx, clamp((tx - this.x) * lag + avoidX * 1.45, -maxV, maxV), resp, dt);
+    this.vy = damp(this.vy, clamp((ty - this.y) * lag + avoidY * 1.45, -maxV * 0.82, maxV * 0.85), resp, dt);
+    this.vz = damp(this.vz, clamp((tz - this.z) * lag, -baseMaxV * 0.6, baseMaxV * 0.6), 5, dt);
     this.x += this.vx * dt; this.y += this.vy * dt; this.z += this.vz * dt;
+
+    // ---- Hard non-penetration safety net: allies NEVER clip through cliffs, rocks, ground or structures ----
+    if (game?.forEachWorldObstacle) {
+      game.forEachWorldObstacle((cx, cy, cz, rh, hy) => {
+        const padY = hy + 3.8;
+        if (Math.abs(this.y - cy) >= padY) return;
+        const padR = rh + 5.2;
+        const dx = this.x - cx;
+        const dz = this.z - cz;
+        if (Math.abs(dx) >= padR || Math.abs(dz) >= padR) return;
+        const distSq = dx * dx + dz * dz;
+        if (distSq >= padR * padR) return;
+        if (this.y >= cy + hy * 0.42 && cy + padY <= 96) {
+          this.y = cy + padY + 0.6;
+          this.vy = Math.max(this.vy, 20);
+        } else {
+          const dirX = Math.abs(dx) > 0.4 ? Math.sign(dx) : (Math.sign(route.center - cx) || 1);
+          const needX = Math.sqrt(Math.max(1, padR * padR - dz * dz)) + 1.4;
+          this.x = clamp(cx + dirX * needX, -188, 188);
+          this.vx = dirX * Math.max(Math.abs(this.vx), 48);
+        }
+      });
+    }
+    this.x = clamp(this.x, -188, 188);
+    this.y = clamp(this.y, floorMin, 96);
     this.mesh.position.set(this.x, this.y, this.z);
 
-    // bank from actual velocity; KIT (and anyone mid-special) rolls through loops
-    const bank = clamp(-this.vx * 0.0065, -0.95, 0.95) + Math.sin(t * 0.7 + this.phase) * 0.05;
+    this._avoidBank = damp(this._avoidBank, clamp(-avoidX * 0.0095, -0.72, 0.72), 8, dt);
+    const bank = clamp(-this.vx * 0.0075 + this._avoidBank, -1.18, 1.18) + Math.sin(t * 0.7 + this.phase) * 0.05;
     if (this._loopT > 0) this._loopT -= dt;
     const loop = this._loopT > 0 ? (1 - this._loopT / 0.9) * TAU : (d.role === 'cover' ? Math.sin(t * 0.4 + this.phase) * 0.35 : 0);
-    this.mesh.rotation.set(clamp(this.vy * -0.004, -0.5, 0.5), 0, bank + loop, 'ZYX');
-    const gg = this.mesh.userData.engineGlow;
-    if (gg) gg.scale.setScalar(0.85 + Math.sin(t * 6 + this.phase) * 0.08);
+    this.mesh.rotation.set(clamp(this.vy * 0.0048, -0.48, 0.48), 0, bank + loop, 'ZYX');
 
-    // ---- firing: aimed shots, with the occasional rapid-fire burst ----
+    const gg = this.mesh.userData.engineGlow;
+    if (gg) gg.scale.setScalar(0.88 + Math.sin(t * 8 + this.phase) * 0.1);
+    const plumes = this.mesh.userData.enginePlumes;
+    if (plumes) {
+      const pLen = 0.85 + Math.sin(t * 44 + this.phase) * 0.14 + (this.state === 'engage' ? 0.25 : 0);
+      for (const pl of plumes) pl.scale.set(0.9, 0.9, pLen);
+    }
+
+    this._updateTrails();
+
     this.fireCd -= dt;
     if (this.fireCd <= 0) {
-      const tgt = this.engaged && this.engaged.alive ? this.engaged : this._target(enemies);
+      const tgt = this.engaged && this.engaged.alive && !this.engaged.dying ? this.engaged : this._target(enemies);
       if (tgt) {
         if (Math.random() < d.burstChance) {
-          this.fireCd = rand(1.6, 2.6);
-          this._burst(tgt.mesh.position, proj, 5 + (Math.random() * 3 | 0));
+          this.fireCd = rand(1.6, 2.5);
+          this._burst(tgt.mesh.position, proj, 4 + (Math.random() * 3 | 0));
         } else {
-          this.fireCd = rand(d.fireGap[0], d.fireGap[1]) * (this.state === 'engage' ? 0.7 : 1);
+          this.fireCd = rand(d.fireGap[0], d.fireGap[1]) * (this.state === 'engage' ? 0.72 : 1);
           _v1.copy(tgt.mesh.position); _v1.z -= 4;
           proj.fireAlly(this.mesh.position, _v1, this.color);
           audio.laser(1);
@@ -314,7 +448,6 @@ class Wingmate {
       } else this.fireCd = rand(0.6, 1.1);
     }
 
-    // ---- bomb run: any ally will drop a bomb on a dense cluster ----
     this.bombCd -= dt;
     if (this.bombCd <= 0) {
       const cluster = this._cluster(enemies);
@@ -325,17 +458,13 @@ class Wingmate {
       } else this.bombCd = rand(2, 4);
     }
 
-    // ---- signature special attack ----
     this._trySpecial(dt, player, enemies, proj, game);
 
-    // ---- threat and enemy-lock markers ----
     if (this.danger > 0) {
       this.danger -= dt;
       this.marker.material.color.setHex(0xff3b52);
-      this.marker.material.opacity = 0.6 + Math.sin(performance.now() * 0.02) * 0.4;
+      this.marker.material.opacity = 0.65 + Math.sin(performance.now() * 0.02) * 0.35;
       if (this.danger <= 0) {
-        // Ignoring a rescue call causes a controlled retreat, not an invisible
-        // 112.5-HP drain. Direct hits remain the principal source of damage.
         this.marker.material.opacity = 0;
         this.hp = Math.max(0, this.hp - 14);
         if (this.hp <= 0) this.shotDown(game);
@@ -347,78 +476,90 @@ class Wingmate {
       }
     } else if (this.targetedBy > 0) {
       this.marker.material.color.setHex(0xffc55a);
-      this.marker.material.opacity = 0.22 + Math.sin(performance.now() * 0.018) * 0.12;
+      this.marker.material.opacity = 0.25 + Math.sin(performance.now() * 0.018) * 0.14;
     } else {
       this.marker.material.opacity = 0;
     }
-    this.portraitRoundel.material.opacity = this.damageFlash > 0 ? 1 : 0.96;
+    this.portraitRoundel.material.opacity = this.damageFlash > 0 ? 1 : 0.90;
   }
 
-  /** choose the next autonomous patrol waypoint in this pilot's own style */
-  _pickWaypoint() {
+  _pickWaypoint(player, game) {
     const d = this.def;
+    const tz = PLAYER_Z + rand(d.zBand[0], d.zBand[1]);
+    const route = routeAt(game, tz);
+    const playerAnchor = player ? clamp(player.x * 0.55, -80, 80) : route.center;
+    const anchorX = playerAnchor * 0.62 + route.center * 0.38;
     let x;
-    if (d.xStyle === 'sweep') x = (this.wp.x >= 0 ? -1 : 1) * rand(110, 235);     // cross to the far side
-    else if (d.xStyle === 'rove') x = rand(-215, 215);                            // roam anywhere
-    else x = clamp(this.wp.x + rand(-130, 130), -190, 190);                       // weave around a zone
-    this.wp.set(x, rand(d.yBand[0], d.yBand[1]), PLAYER_Z + rand(d.zBand[0], d.zBand[1]));
+    if (d.xStyle === 'sweep') x = anchorX + (this.wp.x >= anchorX ? -1 : 1) * rand(42, 92);
+    else if (d.xStyle === 'rove') x = anchorX + rand(-96, 96);
+    else x = clamp(this.wp.x + rand(-68, 68), anchorX - 84, anchorX + 84);
+    const corridorHalf = Math.max(46, route.halfWidth + 14);
+    x = clamp(x, route.center - corridorHalf, route.center + corridorHalf);
+    x = clamp(x, -150, 150);
+    const minY = Math.max(d.yBand[0], (game?.zone?.floorY ?? 0) + 9.5);
+    this.wp.set(x, rand(minY, Math.max(minY + 8, d.yBand[1])), tz);
   }
 
-  /** rapid-fire burst of aimed shots */
   _burst(targetPos, proj, n) {
-    const aim = targetPos.clone(); aim.z -= 4;
-    for (let k = 0; k < n; k++) setTimeout(() => {
-      if (this.hidden > 0) return;
-      _v1.copy(aim); _v1.x += rand(-3, 3); _v1.y += rand(-3, 3);
-      proj.fireAlly(this.mesh.position, _v1, this.color);
-      audio.laser(1);
-    }, k * 70);
+    const ax = targetPos.x, ay = targetPos.y, az = targetPos.z - 4;
+    for (let k = 0; k < n; k++) {
+      this._burstQueue.push({
+        t: k * 0.07,
+        fn: () => {
+          _v1.set(ax + rand(-3, 3), ay + rand(-3, 3), az);
+          proj.fireAlly(this.mesh.position, _v1, this.color);
+          audio.laser(1);
+        },
+      });
+    }
   }
 
-  /** signature special on a long cooldown: barrage / cover-volley / loop-bomb */
   _trySpecial(dt, player, enemies, proj, game) {
     this.specialCd -= dt;
     if (this.specialCd > 0 || this.danger > 0 || this.hidden > 0) return;
     const d = this.def;
     if (d.special === 'barrage') {
-      if (!this._target(enemies)) { this.specialCd = 2.5; return; }               // only when there's work
+      if (!this._target(enemies)) { this.specialCd = 2.5; return; }
       this.specialCd = rand(d.specialCd[0], d.specialCd[1]);
       this.comms(game, 'barrage', 2.2);
-      for (let k = 0; k < 12; k++) setTimeout(() => {
-        if (this.hidden > 0) return;
-        _v1.set(player.x + rand(-45, 45), player.y + rand(-12, 34), PLAYER_Z - 120);
-        proj.fireAlly(this.mesh.position, _v1, this.color); audio.laser(1);
-      }, k * 55);
+      for (let k = 0; k < 10; k++) {
+        this._burstQueue.push({
+          t: k * 0.055,
+          fn: () => {
+            _v1.set(player.x + rand(-40, 40), player.y + rand(-10, 26), PLAYER_Z - 110);
+            proj.fireAlly(this.mesh.position, _v1, this.color);
+            audio.laser(1);
+          },
+        });
+      }
     } else if (d.special === 'volley') {
       this.specialCd = rand(d.specialCd[0], d.specialCd[1]);
       this.comms(game, 'volley', 2.2);
       audio.comms('targetEngaged', 0.18);
       for (let k = -3; k <= 3; k++) {
-        _v1.set(this.mesh.position.x + k * 26, this.mesh.position.y + 8, this.mesh.position.z - 120);
-        proj.fireAlly(this.mesh.position, _v1.clone(), this.color);
+        _v1.set(this.mesh.position.x + k * 22, this.mesh.position.y + 6, this.mesh.position.z - 110);
+        proj.fireAlly(this.mesh.position, _v1, this.color);
       }
       audio.laser(2);
     } else if (d.special === 'loopbomb') {
       const cluster = this._cluster(enemies);
-      const tgt = cluster || _v1.set(player.x, player.y + 6, PLAYER_Z - 90).clone();
+      const tgt = cluster || _v1.set(player.x, player.y + 6, PLAYER_Z - 85).clone();
       this.specialCd = rand(d.specialCd[0], d.specialCd[1]);
-      this._loopT = 0.9;   // barrel-loop flourish
+      this._loopT = 0.9;
       this.comms(game, 'loopbomb', 2.2);
       game.allyBomb(tgt);
     }
   }
 
-  /** centre of a 3+ enemy cluster ahead, else null */
   _cluster(enemies) {
-    const near = enemies.list.filter((e) => e.mesh.position.z > -360 && e.mesh.position.z < -60);
+    const near = enemies.list.filter((e) => !e.dying && e.mesh.position.z > -250 && e.mesh.position.z < -50);
     if (near.length < 3) return null;
     let cx = 0, cy = 0, cz = 0;
     for (const e of near) { cx += e.mesh.position.x; cy += e.mesh.position.y; cz += e.mesh.position.z; }
     const n = near.length;
-    // only if they're actually clustered (spread not too wide)
     const c = new THREE.Vector3(cx / n, cy / n, cz / n);
     let tight = 0;
-    for (const e of near) if (e.mesh.position.distanceTo(c) < 40) tight++;
+    for (const e of near) if (e.mesh.position.distanceTo(c) < 46) tight++;
     return tight >= 3 ? c : null;
   }
 }
@@ -436,16 +577,23 @@ export class Wingmates {
     this.chatTimer = rand(5, 9);
     this.eventTimer = rand(9, 14);
     for (const w of this.list) {
-      w.danger = 0; w.hidden = 0; w.hp = w.maxHp;
+      w.danger = 0; w.hidden = 0; w.hp = w.maxHp; w._burstQueue.length = 0;
       w.damageCooldown = 0; w.damageFlash = 0; w.targetedBy = 0; w.lastDamage = ''; w.lastComms = '';
       w.marker.material.opacity = 0; w.mesh.visible = true; w.state = 'form'; w.engaged = null;
+      w._setTrailsVisible(true);
     }
   }
 
-  setVisible(v) { this._visible = v; for (const w of this.list) w.mesh.visible = v && w.hidden <= 0; }
+  setVisible(v) {
+    this._visible = v;
+    for (const w of this.list) {
+      const show = v && w.hidden <= 0;
+      w.mesh.visible = show;
+      w._setTrailsVisible(show);
+    }
+  }
 
   reportKill() {
-    // occasional radio boast when an ally scores
     this._killLineT -= 0.016;
     if (this._killLineT <= 0 && Math.random() < 0.5) {
       this._killLineT = rand(3, 6);
@@ -456,7 +604,7 @@ export class Wingmates {
 
   onEnemyKilled(pos) {
     for (const w of this.list) {
-      if (w.danger > 0 && w.hidden <= 0 && Math.hypot(pos.x - w.x, pos.y - w.y) < 40 && Math.abs(pos.z - w.z) < 70) {
+      if (w.danger > 0 && w.hidden <= 0 && Math.hypot(pos.x - w.x, pos.y - w.y) < 48 && Math.abs(pos.z - w.z) < 75) {
         w.danger = 0;
         w.hp = Math.max(w.hp, 62);
         w.marker.material.opacity = 0;
@@ -472,12 +620,10 @@ export class Wingmates {
   update(dt, player, enemies, proj) {
     for (const w of this.list) w.update(dt, player, enemies, proj, this.game);
 
-    // push a compact status readout to the HUD
     this.game.hud.setWingStatus(this._visible
       ? this.list.map((w) => ({ name: w.name, color: w.color, hp: w.hp, maxHp: w.maxHp, state: w.statusState, targetedBy: w.targetedBy }))
       : null);
 
-    // idle chatter
     this.chatTimer -= dt;
     if (this.chatTimer <= 0) {
       this.chatTimer = rand(10, 17);
@@ -485,7 +631,6 @@ export class Wingmates {
       if (available.length) pick(available).comms(this.game, 'ambient', 2.8);
     }
 
-    // rescue event: a wingmate gets an enemy on its tail
     this.eventTimer -= dt;
     if (this.eventTimer <= 0 && this.game.state === 'playing' && !this.game.boss && !this.game.rival?.active) {
       this.eventTimer = rand(10, 16);
@@ -494,11 +639,10 @@ export class Wingmates {
         const w = pick(avail);
         w.danger = 8.5; w.state = 'form'; w.engaged = null;
         w.marker.material.opacity = 1;
-        // A paired tail section turns the warning into real, visible combat pressure.
         for (let i = 0; i < 2; i++) {
           const pursuer = enemies.spawn('lancer', {
-            x: w.x + rand(-10, 10), y: w.y + rand(-4, 4), z: w.z - 30 - i * 12,
-            speed: 0.76 + i * 0.05, fireCd: 0.3 + i * 0.18,
+            x: w.x + rand(-10, 10), y: w.y + rand(-4, 4), z: w.z - 28 - i * 12,
+            speed: 0.72 + i * 0.05, fireCd: 0.35 + i * 0.18,
           });
           pursuer.forcedWingmate = w;
           pursuer.allyTarget = w;

@@ -1,12 +1,38 @@
-/** Keyboard, mouse, and mobile touch input state. */
+/** Keyboard, mouse, gamepad, and mobile touch input state. */
 export class Input {
   constructor(canvas) {
     this.keys = new Set();
     this.mouse = { x: 0, y: 0, nx: 0, ny: 0, down: false, rightDown: false, active: false };
+    this._lastMouseX = null;
+    this._lastMouseY = null;
+    this._mouseWakeDist = 0;
+
     this.pressedThisFrame = new Set();
     this._justPressed = new Set();
     this._virtualKeys = new Map();
     this.onTouchAction = null;
+
+    // Double-tap barrel roll tracker (A/D or ArrowLeft/ArrowRight within 250ms)
+    this._lastTap = { dir: 0, t: 0 };
+
+    // Shared pilot flight settings (kept in sync by Game)
+    this.settings = {
+      invertY: false,
+      autoFire: false,
+      sensitivity: 1.0,
+    };
+
+    // Gamepad state (Standard Gamepad API)
+    this.gamepad = {
+      connected: false,
+      moveX: 0,
+      moveY: 0,
+      firing: false,
+      chargeHeld: false,
+      boosting: false,
+      braking: false,
+      prevButtons: [],
+    };
 
     this.touch = {
       capable: this._detectTouchCapability(),
@@ -26,14 +52,33 @@ export class Input {
       const k = e.code;
       this.keys.add(k);
       this._justPressed.add(k);
+
       // Record a Cmd(Command)-modified arrow as a distinct roll chord even
       // though macOS may swallow the arrow keyup while Meta is held.
       if (e.metaKey && (k === 'ArrowLeft' || k === 'ArrowRight')) {
         this._justPressed.add(k === 'ArrowLeft' ? 'RollLeft' : 'RollRight');
+        this._lastTap.t = 0;
         e.preventDefault();
+      } else if (k === 'KeyA' || k === 'ArrowLeft' || k === 'KeyD' || k === 'ArrowRight') {
+        // Classic Star Fox double-tap left/right barrel roll (250ms window)
+        const dir = (k === 'KeyA' || k === 'ArrowLeft') ? -1 : 1;
+        const now = performance.now();
+        if (this._lastTap.dir === dir && (now - this._lastTap.t) <= 250) {
+          this._justPressed.add(dir < 0 ? 'RollLeft' : 'RollRight');
+          this._lastTap.t = 0;
+        } else {
+          this._lastTap.dir = dir;
+          this._lastTap.t = now;
+        }
       }
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ControlLeft'].includes(k)) e.preventDefault();
+
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ControlLeft'].includes(k)) {
+        // Do not hijack Space/Arrows while typing in the callsign input
+        const tag = document.activeElement?.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') e.preventDefault();
+      }
     });
+
     window.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
       // Meta/Cmd release: macOS often drops other keyups while Cmd is held,
@@ -42,6 +87,7 @@ export class Input {
         for (const c of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyA', 'KeyD', 'KeyW', 'KeyS']) this.keys.delete(c);
       }
     });
+
     window.addEventListener('blur', () => {
       this.keys.clear();
       this.mouse.down = false;
@@ -49,18 +95,40 @@ export class Input {
       this._clearTouchState();
     });
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) this._clearTouchState();
+      if (document.hidden) {
+        this.keys.clear();
+        this.mouse.down = false;
+        this.mouse.rightDown = false;
+        this._clearTouchState();
+      }
     });
 
     canvas.addEventListener('mousemove', (e) => {
-      this.mouse.x = e.clientX; this.mouse.y = e.clientY;
+      const prevX = this._lastMouseX ?? e.clientX;
+      const prevY = this._lastMouseY ?? e.clientY;
+      const delta = Math.hypot(e.clientX - prevX, e.clientY - prevY);
+      this._lastMouseX = e.clientX;
+      this._lastMouseY = e.clientY;
+
+      this.mouse.x = e.clientX;
+      this.mouse.y = e.clientY;
       const nx = (e.clientX / window.innerWidth) * 2 - 1;
       const ny = -((e.clientY / window.innerHeight) * 2 - 1);
       if (Number.isFinite(nx) && Number.isFinite(ny)) {
-        this.mouse.nx = nx; this.mouse.ny = ny;
-        this.mouse.active = true;
+        this.mouse.nx = nx;
+        this.mouse.ny = ny;
+        // Require deliberate pointer movement (>= 8px) before stealing control
+        // back from keyboard/gamepad steering, preventing trackpad micro-jitter.
+        if (!this.mouse.active) {
+          this._mouseWakeDist += delta;
+          if (this._mouseWakeDist >= 8) {
+            this.mouse.active = true;
+            this._mouseWakeDist = 0;
+          }
+        }
       }
     });
+
     canvas.addEventListener('mousedown', (e) => {
       if (e.button === 0) { this.mouse.down = true; this._justPressed.add('MouseLeft'); }
       if (e.button === 2) { this.mouse.rightDown = true; this._justPressed.add('MouseRight'); }
@@ -72,6 +140,75 @@ export class Input {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
     this._bindTouchControls();
+  }
+
+  /** Relinquish mouse steering (e.g. when keyboard/gamepad steers) and reset wake deadzone. */
+  deactivateMouse() {
+    this.mouse.active = false;
+    this._mouseWakeDist = 0;
+  }
+
+  /** Poll connected standard Gamepad (call once per frame before player/weapons update). */
+  pollGamepad() {
+    const gpState = this.gamepad;
+    const pads = navigator.getGamepads?.();
+    let pad = null;
+    if (pads) {
+      for (const p of pads) {
+        if (p && p.connected) { pad = p; break; }
+      }
+    }
+    if (!pad) {
+      gpState.connected = false;
+      gpState.moveX = 0;
+      gpState.moveY = 0;
+      gpState.firing = false;
+      gpState.chargeHeld = false;
+      gpState.boosting = false;
+      gpState.braking = false;
+      gpState.prevButtons.length = 0;
+      return;
+    }
+
+    gpState.connected = true;
+    const deadzone = 0.16;
+    const shapeAxis = (v) => {
+      if (!Number.isFinite(v) || Math.abs(v) < deadzone) return 0;
+      return Math.sign(v) * ((Math.abs(v) - deadzone) / (1 - deadzone));
+    };
+
+    const btn = (i) => !!pad.buttons[i]?.pressed;
+    const btnVal = (i) => pad.buttons[i]?.value ?? (btn(i) ? 1 : 0);
+    const rising = (i) => btn(i) && !gpState.prevButtons[i];
+
+    let sx = shapeAxis(pad.axes[0] ?? 0);
+    let sy = -shapeAxis(pad.axes[1] ?? 0); // push stick up = +1
+    if (sx === 0) {
+      if (btn(14)) sx = -1;
+      else if (btn(15)) sx = 1;
+    }
+    if (sy === 0) {
+      if (btn(12)) sy = 1;
+      else if (btn(13)) sy = -1;
+    }
+    gpState.moveX = sx;
+    gpState.moveY = sy;
+
+    gpState.firing = btn(0) || btnVal(7) > 0.35;
+    gpState.chargeHeld = btn(2) || btnVal(6) > 0.35;
+    gpState.boosting = btn(3);
+    gpState.braking = btn(10) || btn(11); // L3/R3 optional brake
+
+    if (rising(1)) this.pressedThisFrame.add('KeyB');          // B/Circle: Bomb & Detonate
+    if (rising(4)) this.pressedThisFrame.add('RollLeft');      // LB: Roll Left
+    if (rising(5)) this.pressedThisFrame.add('RollRight');     // RB: Roll Right
+    if (rising(9)) this.pressedThisFrame.add('GamepadPause');  // Start: Pause
+    if (rising(0)) this.pressedThisFrame.add('GamepadConfirm');
+
+    if (sx !== 0 || sy !== 0) this.deactivateMouse();
+
+    gpState.prevButtons.length = pad.buttons.length;
+    for (let i = 0; i < pad.buttons.length; i++) gpState.prevButtons[i] = btn(i);
   }
 
   _detectTouchCapability() {
@@ -221,16 +358,16 @@ export class Input {
     let x = 0;
     if (this.down('KeyA', 'ArrowLeft')) x -= 1;
     if (this.down('KeyD', 'ArrowRight')) x += 1;
-    return x || this.touch.moveX;
+    return x || this.touch.moveX || this.gamepad.moveX;
   }
   get moveY() {
     let y = 0;
     if (this.down('KeyS', 'ArrowDown')) y -= 1;
     if (this.down('KeyW', 'ArrowUp')) y += 1;
-    return y || this.touch.moveY;
+    return y || this.touch.moveY || this.gamepad.moveY;
   }
-  get firing() { return this.down('Space', 'MouseLeft'); }
-  get chargeHeld() { return this.down('KeyC') || !!this.mouse.rightDown; }
-  get boosting() { return this.down('ShiftLeft', 'ShiftRight'); }
-  get braking() { return this.down('ControlLeft', 'ControlRight', 'KeyX'); }
+  get firing() { return this.down('Space', 'MouseLeft') || this.gamepad.firing || !!this.settings.autoFire; }
+  get chargeHeld() { return this.down('KeyC') || !!this.mouse.rightDown || this.gamepad.chargeHeld; }
+  get boosting() { return this.down('ShiftLeft', 'ShiftRight') || this.gamepad.boosting; }
+  get braking() { return this.down('ControlLeft', 'ControlRight', 'KeyX') || this.gamepad.braking; }
 }

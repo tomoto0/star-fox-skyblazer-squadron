@@ -10,12 +10,14 @@ import { rand, TAU } from './util.js';
  * hot emissive glow that cools as it flies.
  */
 const FILES = ['meteor_half', 'meteor', 'rocks_a', 'rocks_b', 'crystals', 'part_gun', 'part_barrel'];
-const POOL = 72;
+const POOL = 96;
 
 export class Debris {
   constructor(scene) {
     this.scene = scene;
     this.ready = false;
+    this.budgetScale = 1.0;
+    this._head = 0;
     this.frags = [];          // normalised geometries
     this.active = [];
     this.pool = [];
@@ -58,30 +60,41 @@ export class Debris {
     }
   }
 
+  setBudget(scale = 1.0) {
+    this.budgetScale = Math.max(0.25, Math.min(1.0, scale));
+  }
+
   /** spray fragments from a destroyed target */
   burst(x, y, z, opts = {}) {
     if (!this.ready) return;
-    const count = opts.count ?? 6;
+    const count = Math.max(2, Math.round((opts.count ?? 6) * this.budgetScale));
+    const maxActive = Math.max(16, Math.round(POOL * this.budgetScale));
     const scale = opts.scale ?? 1;
     const spd = opts.speed ?? 1;
     const color = opts.color ?? 0x9aa0ac;
     for (let i = 0; i < count; i++) {
-      const m = this.pool.find((p) => !p.visible);
+      if (this.active.length >= maxActive) break;
+      let m = null;
+      for (let k = 0; k < POOL; k++) {
+        const cand = this.pool[(this._head + k) % POOL];
+        if (!cand.visible) { m = cand; this._head = (this._head + k + 1) % POOL; break; }
+      }
       if (!m) break;
       m.geometry = this.frags[(Math.random() * this.frags.length) | 0];
       m.visible = true;
-      m.position.set(x + rand(-1.5, 1.5), y + rand(-1.5, 1.5), z + rand(-1.5, 1.5));
-      const base = scale * rand(0.55, 1.25);   // smaller shards
+      m.position.set(x + rand(-2.2, 2.2), y + rand(-2.0, 2.0), z + rand(-2.0, 2.0));
+      const base = scale * rand(0.85, 1.75);
       m.scale.setScalar(base);
       m.rotation.set(rand(TAU), rand(TAU), rand(TAU));
       m.material.color.set(color);
-      m.material.emissive.setHex(0xff6a24);
-      m.material.emissiveIntensity = 1.5;
-      const a = rand(TAU), el = rand(-0.4, 1.05), s = rand(26, 66) * spd;
+      m.material.emissive.setHex(0xff7224);
+      m.material.emissiveIntensity = 2.1;
+      const a = rand(TAU), el = rand(-0.35, 1.05), s = rand(30, 74) * spd;
       const u = m.userData;
-      u.vel.set(Math.cos(a) * Math.cos(el) * s, Math.sin(el) * s + rand(8, 30), Math.sin(a) * Math.cos(el) * s);
-      u.ang.set(rand(-9, 9), rand(-9, 9), rand(-9, 9));
-      u.life = u.maxLife = rand(0.85, 1.7);
+      // Forward +Z bias lets burning wreckage fly dramatically past the cockpit!
+      u.vel.set(Math.cos(a) * Math.cos(el) * s, Math.sin(el) * s + rand(8, 30), Math.sin(a) * Math.cos(el) * s + (opts.vzBias ?? 22));
+      u.ang.set(rand(-10, 10), rand(-10, 10), rand(-10, 10));
+      u.life = u.maxLife = rand(0.95, 1.85);
       u.base = base;
       this.active.push(m);
     }
