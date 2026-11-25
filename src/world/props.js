@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { rand, pick, TAU, loadDetailTexture } from '../core/util.js';
+import { rand, pick, clamp, TAU, loadDetailTexture } from '../core/util.js';
 import { flightRoute } from './terrain.js';
 import { normalizeImportedMaterial } from '../entities/shipFactory.js';
 
@@ -42,10 +42,10 @@ const ZONE_PROP_POOLS = {
   dune:  ['scifi_bridge', 'scifi_antenna', 'aero_station_ring', 'hangar_largea', 'rocket_basea', 'machine_generatorlarge'],
 };
 
-const SPACING = 340;
-const N_PROP = 6;
+const SPACING = 235;
+const N_PROP = 8;
 const N_SHIP = 3;
-const N_HERO = 1;
+const N_HERO = 2;
 const FRONT = 150;
 const SHOW_LARGE_ARTIFICIAL_SCENERY = true;
 
@@ -228,8 +228,10 @@ function buildFoundation(referenceSize, zoneId = 'dune') {
   };
   const c = palette[zoneId] ?? palette.dune;
   const g = new THREE.Group();
-  const r = Math.max(5.5, referenceSize * 0.21);
-  const h = Math.max(3.2, referenceSize * 0.09);
+  // Always built in normalised world units (`referenceSize = targetSize`), strictly bounded
+  // so small source GLBs never blow up the foundation into a corridor-blocking colossus!
+  const r = clamp(referenceSize * 0.28, 7.5, 24.0);
+  const h = clamp(referenceSize * 0.13, 3.0, 9.5);
   const slab = pbr(c.slab, 0x000000, 0, { panel: true, roughness: 0.56, metalness: 0.34 });
   const edge = pbr(c.edge, 0x000000, 0, { panel: true, roughness: 0.68, metalness: 0.36 });
   const paint = pbr(c.paint, 0x000000, 0, { detail: true, roughness: 0.58, metalness: 0.30 });
@@ -335,7 +337,7 @@ function buildFoundation(referenceSize, zoneId = 'dune') {
  */
 function buildFacilityServiceLayer(referenceSize, zoneId, name) {
   const g = new THREE.Group();
-  const s = Math.max(4.4, referenceSize * 0.11);
+  const s = clamp(referenceSize * 0.14, 3.8, 9.5);
   const tones = {
     sea:   [0x284354, 0x7daabf, 0x6ae4ff, 0xffc862],
     gorge: [0x504c44, 0xa29376, 0x8feaff, 0xffc05e],
@@ -679,39 +681,50 @@ export class Props {
   }
 
   _load() {
-    const loader = new GLTFLoader();
-    const names = [...KENNEY, ...Object.keys(HERO_PATHS)];
-    let pending = names.length + SHIPS.length;
-    const done = () => { if (--pending === 0) this._onLoaded(); };
-    for (const n of KENNEY) {
-      const path = EXTERNAL_PROP_PATHS[n] ?? `props/${n}`;
-      loader.load(`./assets/models/${path}.glb`, (g) => { this._prep(n, g); done(); }, undefined, done);
-    }
-    for (const n of Object.keys(HERO_PATHS)) {
-      loader.load(`./assets/models/${HERO_PATHS[n]}.glb`, (g) => { this._prep(n, g); done(); }, undefined, done);
-    }
-    for (const n of SHIPS) loader.load(`./assets/models/ships/${n}.gltf`, (g) => { this._prep(n, g); done(); }, undefined, done);
-  }
-
-  _onLoaded() {
+    // Initialize procedural hero citadels & prop holders immediately so artificial landmarks
+    // never stall behind heavy background ship downloads!
     for (let i = 0; i < N_PROP; i++) {
-      const slot = { z: -i * SPACING - rand(0, 60), inner: null, spin: 0, colliders: [] };
+      const slot = { z: -i * SPACING - rand(40, 110), inner: null, spin: 0, colliders: [] };
       this.group.add((slot.holder = new THREE.Group()));
       this.propSlots.push(slot);
-    }
-    for (let i = 0; i < N_SHIP; i++) {
-      const name = SHIPS[i % SHIPS.length];
-      const holder = this._container(name);
-      this.group.add(holder);
-      this.shipSlots.push({ z: -i * (SPACING * 2.6) - rand(0, 200), holder, name, bob: rand(0, TAU), colliders: [] });
     }
     for (let i = 0; i < N_HERO; i++) {
       const holder = new THREE.Group();
       this.group.add(holder);
-      this.heroSlots.push({ z: -780 - i * 1240 - rand(0, 140), holder, kind: null, phase: rand(0, TAU), colliders: [] });
+      this.heroSlots.push({ z: -520 - i * 920 - rand(0, 120), holder, kind: null, phase: rand(0, TAU), colliders: [] });
     }
     this.ready = true;
-    if (this.zone) this._reseed();
+    this._propsReady = false;
+    this._shipsReady = false;
+
+    const loader = new GLTFLoader();
+    let propPending = KENNEY.length;
+    const onPropDone = () => {
+      if (--propPending === 0) {
+        this._propsReady = true;
+        if (this.zone) for (const s of this.propSlots) this._rollProp(s);
+      }
+    };
+    for (const n of KENNEY) {
+      const path = EXTERNAL_PROP_PATHS[n] ?? `props/${n}`;
+      loader.load(`./assets/models/${path}.glb`, (g) => { this._prep(n, g); onPropDone(); }, undefined, onPropDone);
+    }
+
+    let shipPending = SHIPS.length;
+    const onShipDone = () => {
+      if (--shipPending === 0) {
+        this._shipsReady = true;
+        for (let i = 0; i < N_SHIP; i++) {
+          const name = SHIPS[i % SHIPS.length];
+          if (!this.templates[name]) continue;
+          const holder = this._container(name);
+          this.group.add(holder);
+          this.shipSlots.push({ z: -i * (SPACING * 2.6) - rand(0, 200), holder, name, bob: rand(0, TAU), colliders: [] });
+        }
+        if (this.zone) for (const s of this.shipSlots) this._rollShip(s);
+      }
+    };
+    for (const n of SHIPS) loader.load(`./assets/models/ships/${n}.gltf`, (g) => { this._prep(n, g); onShipDone(); }, undefined, onShipDone);
   }
 
   _container(name) {
@@ -823,24 +836,49 @@ export class Props {
   }
 
   _reseed() {
-    for (const s of this.propSlots) this._rollProp(s);
-    for (const s of this.shipSlots) this._rollShip(s);
+    if (this._propsReady) for (const s of this.propSlots) this._rollProp(s);
+    if (this._shipsReady) for (const s of this.shipSlots) this._rollShip(s);
     for (const s of this.heroSlots) this._rollHero(s);
   }
 
-  /** Resolve the true terrain-synchronized flight corridor at `worldZ` so props never drift into the lane. */
+  /** Resolve the true terrain-synchronized flight corridor at ANY `worldZ` across Waves 1–16. */
   _routeAt(zoneId, worldZ) {
     const chunks = this.game?.terrain?.chunks;
     if (chunks && chunks.length) {
-      for (let i = 0; i < chunks.length; i++) {
-        const ch = chunks[i];
-        const cz = ch.position.z;
-        if (worldZ <= cz + 12 && worldZ >= cz - 312) {
-          return flightRoute(zoneId, ch.userData.virtualZ + (worldZ - cz));
-        }
-      }
+      // Every chunk shares the same exact offset `virtualZ - position.z = -totalScrolled`.
+      const ref = chunks[0];
+      const zOff = ref.userData.virtualZ - ref.position.z;
+      return flightRoute(zoneId, worldZ + zOff);
     }
     return flightRoute(zoneId, worldZ);
+  }
+
+  /**
+   * Hard mathematical clearance guarantee: after measuring the real 3D collider(s),
+   * push any structure outward along `side` if its innermost edge would encroach
+   * on the navigable central flight corridor `[route.center - clearHalf, route.center + clearHalf]`.
+   */
+  _enforceClearCorridor(slot, zoneId, side, extraPad = 14) {
+    if (!slot.colliders.length) return;
+    const route = this._routeAt(zoneId, slot.z);
+    const minEdgeFromRoute = route.halfWidth + extraPad;
+    const hx = slot.holder.position.x;
+    let worstIntrusion = 0;
+    for (let i = 0; i < slot.colliders.length; i++) {
+      const c = slot.colliders[i];
+      const cx = hx + c.lx;
+      const distFromRoute = Math.abs(cx - route.center);
+      const innerEdge = distFromRoute - c.rh;
+      if (innerEdge < minEdgeFromRoute) {
+        worstIntrusion = Math.max(worstIntrusion, minEdgeFromRoute - innerEdge);
+      }
+    }
+    if (worstIntrusion > 0) {
+      const pushDir = (hx - route.center) >= 0 ? (hx === route.center ? (side || 1) : 1) : -1;
+      slot.holder.position.x += pushDir * (worstIntrusion + 8);
+      // Re-fit local offsets so collider coordinates match the shifted world position cleanly
+      this._fitColliders(slot, slot.colliders[0]?.dmg ?? 18, slot.colliders.length > 1);
+    }
   }
 
   _rollProp(slot) {
@@ -860,15 +898,39 @@ export class Props {
     const name = pick(pool);
     const t = this.templates[name];
     if (!t) return;
+
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const landmarkShell = name === 'aero_station_ring' || name === 'scifi_bridge';
+    const compactFacility = name.startsWith('scifi_') || name.startsWith('satellite');
+    // Keep 75% of artificial facilities right along the visible course shoulders!
+    const background = Math.random() < 0.25;
+    const route = this._routeAt(z.id, slot.z);
+    let targetSize, x;
+    if (background) {
+      targetSize = landmarkShell ? rand(58, 84) : (compactFacility ? rand(38, 56) : rand(44, 66));
+      x = route.center + side * rand(route.halfWidth + 115, route.halfWidth + 195);
+    } else {
+      // Medium-scale artificial outposts right inside the player's forward sightline
+      // while strictly preserving the entire central navigable flight corridor!
+      targetSize = landmarkShell ? rand(44, 62) : (compactFacility ? rand(28, 42) : rand(32, 48));
+      const minClear = route.halfWidth + 28;
+      x = route.center + side * rand(minClear, route.halfWidth + 82);
+    }
+
+    // Normalise the GLB model into WORLD units FIRST while keeping holder scale = 1!
+    // Previously building foundations before scaling holder by `targetSize / t.size`
+    // inflated tiny GLBs (0.69–1.8m) into 500–1200u corridor-blocking colossi.
+    const sc = targetSize / t.size;
     const inner = new THREE.Group();
     const model = t.obj.clone(true);
-    model.position.set(-t.cx, -t.minY, -t.cz);
+    model.scale.setScalar(sc);
+    model.position.set(-t.cx * sc, -t.minY * sc, -t.cz * sc);
     model.visible = true;
     const facility = FACILITIES.has(name);
     if (facility) {
-      const foundation = buildFoundation(t.size, z.id);
+      const foundation = buildFoundation(targetSize, z.id);
       inner.add(foundation);
-      const service = buildFacilityServiceLayer(t.size, z.id, name);
+      const service = buildFacilityServiceLayer(targetSize, z.id, name);
       service.position.y = foundation.userData.topY;
       inner.add(service);
       slot.rotors = service.userData.rotors ?? [];
@@ -877,33 +939,14 @@ export class Props {
       slot.rotors = [];
     }
     inner.add(model);
+    slot.holder.scale.setScalar(1);
     slot.holder.add(inner); slot.inner = inner; slot.name = name;
-
-    const side = Math.random() < 0.5 ? -1 : 1;
-    const landmarkShell = name === 'aero_station_ring' || name === 'scifi_bridge';
-    const compactFacility = name.startsWith('scifi_') || name.startsWith('satellite');
-    const background = landmarkShell || Math.random() < (this._openWater ? 0.55 : 0.48);
-    const route = this._routeAt(z.id, slot.z);
-    let targetSize, x;
-    if (background) {
-      targetSize = landmarkShell ? rand(72, 108) : (compactFacility ? rand(38, 60) : rand(50, 82));
-      x = route.center + side * rand(340, 560);
-      if (Math.abs(x) < 290) x = side * rand(310, 460);
-    } else {
-      // Positioned cleanly outside the wide flight corridor so outposts frame the flanks
-      // without cluttering or blocking the player's navigable flight channel.
-      targetSize = compactFacility ? rand(28, 42) : rand(34, 52);
-      const minClear = route.halfWidth + 148;
-      x = route.center + side * rand(minClear, route.halfWidth + 230);
-      if (Math.abs(x) < 175) x = side * rand(182, 245);
-    }
-    const sc = targetSize / t.size;
-    slot.holder.scale.setScalar(sc);
     slot.holder.position.set(x, this.zone?.floorY ?? 0, slot.z);
     slot.holder.rotation.set(0, rand(TAU), 0);
     slot.spin = 0;
     if (name.startsWith('rocket')) slot.holder.rotation.z = rand(-0.035, 0.035);
     this._fitColliders(slot, 18, facility);
+    this._enforceClearCorridor(slot, z.id, side, background ? 42 : 14);
   }
 
   _rollShip(slot) {
@@ -912,18 +955,23 @@ export class Props {
     const flying = this._openWater ? true : Math.random() < 0.6;
     const t = this.templates[slot.name];
     if (!t) return;
+    const zoneId = this.zone?.id ?? 'dune';
+    const route = this._routeAt(zoneId, slot.z);
     let targetSize, x, y, rotX = 0, rotZ = 0;
     if (flying) {
-      targetSize = rand(46, 78); x = side * rand(340, 580); y = rand(76, 168); rotZ = -side * rand(0.1, 0.36);
+      targetSize = rand(46, 78); x = route.center + side * rand(340, 560); y = rand(96, 174); rotZ = -side * rand(0.1, 0.36);
     } else {
-      targetSize = rand(36, 62); x = side * rand(280, 420); y = rand(0, 3); rotX = rand(-0.12, 0.05); rotZ = rand(-0.1, 0.1);
+      targetSize = rand(36, 62); x = route.center + side * rand(300, 440); y = rand(0, 3); rotX = rand(-0.12, 0.05); rotZ = rand(-0.1, 0.1);
     }
     const sc = targetSize / t.size;
     slot.holder.scale.setScalar(sc);
     slot.holder.position.set(x, (this.zone?.floorY ?? 0) + y, slot.z);
     slot.holder.rotation.set(rotX, rand(-0.5, 0.5) + (flying ? 0 : side * 0.6), rotZ);
     slot.flying = flying;
-    if (flying) this._fitColliders(slot, 22, false);
+    if (flying) {
+      this._fitColliders(slot, 22, false);
+      this._enforceClearCorridor(slot, zoneId, side, 120);
+    }
   }
 
   /** Place a rare, intricately detailed hero megasite citadel well outside the flight lane. */
@@ -941,7 +989,8 @@ export class Props {
     }
     const zoneId = this.zone?.id ?? 'dune';
     const kind = zoneId === 'sea' ? 'hero_coast_rock' : 'hero_desert_rock';
-    const size = zoneId === 'sea' ? rand(152, 198) : rand(146, 188);
+    // Medium-grand citadel scale: impressive landmark silhouette without dominating the whole lane
+    const size = zoneId === 'sea' ? rand(96, 128) : rand(92, 122);
 
     const site = buildMegasite(zoneId);
     site.scale.setScalar(size / 102);
@@ -982,13 +1031,14 @@ export class Props {
 
     const side = Math.random() < 0.5 ? -1 : 1;
     const route = this._routeAt(zoneId, slot.z);
-    let hx = route.center + side * rand(route.halfWidth + 230, route.halfWidth + 360);
-    if (Math.abs(hx) < 285) hx = side * rand(295, 410);
+    const hx = route.center + side * rand(route.halfWidth + 92, route.halfWidth + 150);
+    slot.holder.scale.setScalar(1);
     slot.holder.position.set(hx, (this.zone?.floorY ?? 0) + (zoneId === 'sea' ? -4 : 0), slot.z);
     slot.holder.rotation.y = rand(-0.35, 0.35);
     slot.kind = kind;
     slot.site = site;
     this._fitColliders(slot, 24, true);
+    this._enforceClearCorridor(slot, zoneId, side, 34);
   }
 
   update(dt, scroll) {
@@ -1021,7 +1071,7 @@ export class Props {
           s.site.userData.scannerRotors[i].rotation.y += dt * (0.32 + i * 0.08);
         }
       }
-      if (s.z > FRONT) { s.z -= N_HERO * 1240; this._rollHero(s); }
+      if (s.z > FRONT) { s.z -= N_HERO * 920; this._rollHero(s); }
     }
   }
 }

@@ -3,7 +3,7 @@ import { dotTexture, toonMat, _v1 } from '../core/util.js';
 import { audio } from '../core/audio.js';
 
 const LASER_SPEED = 520;
-const MAXL = 48, MAXE = 240, MAXC = 6, MAXB = 3, MAXAL = 48;
+const MAXL = 72, MAXE = 380, MAXC = 14, MAXB = 3, MAXAL = 48;
 
 /**
  * Enemy bullet presets — each has a distinct 3D shape, colour, size, base
@@ -13,16 +13,25 @@ const MAXL = 48, MAXE = 240, MAXC = 6, MAXB = 3, MAXAL = 48;
  */
 export const BULLET = {
   // Tuned for close-quarters dogfights: brisk enough to outpace ships, readable & sculpted to dodge/deflect!
-  orb:     { core: 0xffd27a, halo: 0xff5a1e, size: 3.0, r: 0.9, speed: 84,  shape: 'orb' },
-  bolt:    { core: 0xeaffff, halo: 0x59c6ff, size: 2.8, r: 0.7, speed: 124, shape: 'bolt' },
-  heavy:   { core: 0xffe6b0, halo: 0xff5020, size: 4.3, r: 1.9, speed: 82,  shape: 'shell' },
-  plasma:  { core: 0xffe0f5, halo: 0xff3d8f, size: 3.5, r: 1.1, speed: 88,  shape: 'ring' },
-  homing:  { core: 0xdcffe4, halo: 0x54ff9e, size: 3.4, r: 1.0, speed: 78,  shape: 'missile', homing: true, trail: 0x54ff9e },
-  venom:   { core: 0xecffb4, halo: 0x9be23a, size: 3.4, r: 1.1, speed: 92,  shape: 'spike' },
-  missile: { core: 0xffe6c0, halo: 0xff7a3a, size: 3.7, r: 1.1, speed: 82,  shape: 'missile', homing: true, trail: 0xff7a3a },
-  flak:    { core: 0xffefc0, halo: 0xffb030, size: 4.6, r: 2.3, speed: 80,  shape: 'shell' },
-  wave:    { core: 0xdcecff, halo: 0x6a9bff, size: 5.0, r: 2.1, speed: 82,  shape: 'ring' },
-  shard:   { core: 0xf4f9ff, halo: 0x8fd0ff, size: 2.8, r: 0.7, speed: 140, shape: 'spike' },
+  orb:       { core: 0xffd27a, halo: 0xff5a1e, size: 3.0, r: 0.9,  speed: 84,  shape: 'orb' },
+  bolt:      { core: 0xeaffff, halo: 0x59c6ff, size: 2.8, r: 0.7,  speed: 124, shape: 'bolt' },
+  heavy:     { core: 0xffe6b0, halo: 0xff5020, size: 4.3, r: 1.9,  speed: 82,  shape: 'shell' },
+  plasma:    { core: 0xffe0f5, halo: 0xff3d8f, size: 3.5, r: 1.1,  speed: 88,  shape: 'ring' },
+  homing:    { core: 0xdcffe4, halo: 0x54ff9e, size: 3.5, r: 1.0,  speed: 78,  shape: 'missile', homing: true, turnRate: 1.85, trail: 0x54ff9e },
+  venom:     { core: 0xecffb4, halo: 0x9be23a, size: 3.4, r: 1.1,  speed: 92,  shape: 'spike' },
+  missile:   { core: 0xffe6c0, halo: 0xff7a3a, size: 3.8, r: 1.1,  speed: 82,  shape: 'missile', homing: true, turnRate: 1.75, trail: 0xff7a3a },
+  swarm:     { core: 0xfff0c8, halo: 0xff3e62, size: 3.6, r: 1.0,  speed: 88,  shape: 'missile', homing: true, turnRate: 2.45, trail: 0xff5270 },
+  torpedo:   { core: 0xdcf8ff, halo: 0x38d8ff, size: 4.4, r: 1.3,  speed: 86,  shape: 'missile', homing: true, turnRate: 2.10, trail: 0x62e8ff },
+  pursuit:   { core: 0xf4dcff, halo: 0xc262ff, size: 4.4, r: 1.25, speed: 74,  shape: 'ring',    homing: true, turnRate: 2.75, trail: 0xc262ff },
+  cluster:   { core: 0xfff2c2, halo: 0xff4628, size: 5.0, r: 2.0,  speed: 78,  shape: 'shell',   splitTime: 0.78, shootable: true, trail: 0xff6a32 },
+  spiral:    { core: 0xd8fff2, halo: 0x26f5c2, size: 3.8, r: 1.05, speed: 88,  shape: 'ring',    helixR: 6.2, helixFreq: 8.8, trail: 0x38f6d2 },
+  rail:      { core: 0xffffff, halo: 0x4ad4ff, size: 4.4, r: 0.85, speed: 192, shape: 'bolt',    trail: 0x6ce8ff },
+  mortar:    { core: 0xffe4a8, halo: 0xff6e24, size: 4.6, r: 1.75, speed: 92,  shape: 'shell',   gravity: -56, trail: 0xff8438 },
+  boomerang: { core: 0xffe2ff, halo: 0xe048ff, size: 4.4, r: 1.25, speed: 96,  shape: 'ring',    trail: 0xe664ff },
+  flak:      { core: 0xffefc0, halo: 0xffb030, size: 4.6, r: 2.3,  speed: 80,  shape: 'shell' },
+  wave:      { core: 0xdcecff, halo: 0x6a9bff, size: 5.0, r: 2.1,  speed: 82,  shape: 'ring' },
+  superwave: { core: 0xfff4d0, halo: 0xff9e38, size: 6.8, r: 2.6,  speed: 96,  shape: 'ring' },
+  shard:     { core: 0xf4f9ff, halo: 0x8fd0ff, size: 2.8, r: 0.7,  speed: 140, shape: 'spike' },
 };
 
 const ELONGATED = new Set(['orb', 'bolt', 'shell', 'missile', 'spike']);
@@ -68,7 +77,7 @@ export class Projectiles {
       g.add(core, nose, sheath, halo, rail, rail2);
       g.visible = false;
       scene.add(g);
-      this.lasers.push({ mesh: g, core, nose, sheath, halo, rail, rail2, level: 1, active: false, vel: new THREE.Vector3(), life: 0, dmg: 1 });
+      this.lasers.push({ mesh: g, core, nose, sheath, halo, rail, rail2, level: 1, style: null, active: false, vel: new THREE.Vector3(), life: 0, dmg: 1 });
     }
 
     /* wingmate (ally) lasers — team-coloured supporting energy lances */
@@ -104,7 +113,7 @@ export class Projectiles {
       g.add(orb, halo, gyroA, gyroB);
       g.visible = false;
       scene.add(g);
-      this.charges.push({ mesh: g, orb, halo, gyroA, gyroB, active: false, vel: new THREE.Vector3(), target: null, life: 0, trailCd: 0 });
+      this.charges.push({ mesh: g, orb, halo, gyroA, gyroB, active: false, vel: new THREE.Vector3(), target: null, life: 0, trailCd: 0, dmgMul: 1, radMul: 1, trailCol: 0x62d8ff });
     }
 
     /* bombs — a spinning finned warhead with glowing plasma collar & hot core */
@@ -166,7 +175,7 @@ export class Projectiles {
       g.add(core, shell, collar, spike, ring, ring2, fins, halo, trail);
       g.visible = false;
       scene.add(g);
-      this.ebullets.push({ mesh: g, core, shell, collar, spike, ring, ring2, fins, exhaust, halo, trail, active: false, vel: new THREE.Vector3(), life: 0, trailCd: 0, deflected: false, radius: 0.9, homing: false, spin: false, shape: 'orb', btype: 'orb', targetWingmate: null });
+      this.ebullets.push({ mesh: g, core, shell, collar, spike, ring, ring2, fins, exhaust, halo, trail, active: false, vel: new THREE.Vector3(), life: 0, age: 0, trailCd: 0, deflected: false, radius: 0.9, homing: false, shootable: false, spin: false, shape: 'orb', btype: 'orb', targetWingmate: null, splitT: 0, helixR: 0, helixFreq: 0, helixPhase: 0, gravity: 0, curveX: 0 });
     }
   }
 
@@ -183,7 +192,7 @@ export class Projectiles {
     return null;
   }
 
-  fireLaser(from, toward, dmg, level) {
+  fireLaser(from, toward, dmg, level, style = null) {
     const b = this._alloc(this.lasers, '_laserHead');
     if (!b) return null;
     b.active = true; b.mesh.visible = true;
@@ -191,22 +200,30 @@ export class Projectiles {
     b.vel.copy(toward).sub(from).normalize().multiplyScalar(LASER_SPEED);
     b.mesh.lookAt(_v1.copy(from).add(b.vel));
     // Tuned engagement range (~365 units) keeps combat excitingly close-up!
-    b.life = 0.70;
+    b.life = level >= 4 ? 0.78 : 0.70;
     b.dmg = dmg;
-    const col = level >= 3 ? 0x59c6ff : 0x54ff9e;
+    b.style = style;
+    const isCrimson = style === 'crimson';
+    const isOverdrive = style === 'overdrive';
+    const isPlasma = level >= 4;
+    const col = isOverdrive ? 0xffe466 : isCrimson ? 0xff4e76 : isPlasma ? 0xffc844 : level >= 3 ? 0x59c6ff : 0x54ff9e;
+    const ring2Col = isOverdrive ? 0x72f8ff : isCrimson ? 0xffe288 : isPlasma ? 0x64f2ff : 0xd2f7ff;
     b.halo.material.color.set(col);
+    b.halo.scale.setScalar(isPlasma || isOverdrive ? 4.4 : 3.4);
     b.sheath.material.color.set(col);
-    b.nose.material.color.set(level >= 3 ? 0xd8f5ff : 0xe8fff2);
-    b.core.material.color.set(level >= 3 ? 0xe8f8ff : 0xf4fff8);
+    b.nose.material.color.set(isPlasma || isOverdrive ? 0xfff8d6 : isCrimson ? 0xffdbe4 : level >= 3 ? 0xd8f5ff : 0xe8fff2);
+    b.core.material.color.set(isPlasma || isOverdrive ? 0xfffdf0 : isCrimson ? 0xffeef2 : level >= 3 ? 0xe8f8ff : 0xf4fff8);
     b.level = level;
-    b.rail.visible = level >= 2;
+    b.rail.visible = level >= 2 || isOverdrive || isCrimson;
     b.rail.material.color.set(col);
-    b.rail.scale.setScalar(level >= 3 ? 1.38 : 1.0);
-    b.rail.material.opacity = level >= 3 ? 0.96 : 0.74;
-    b.rail2.visible = level >= 3;
-    b.rail2.material.color.set(0xd2f7ff);
-    b.rail2.scale.setScalar(1.12);
-    b.sheath.scale.set(level >= 3 ? 1.24 : level === 2 ? 1.08 : 0.96, level >= 3 ? 1.24 : level === 2 ? 1.08 : 0.96, level >= 3 ? 1.18 : 1.0);
+    b.rail.scale.setScalar(isPlasma || isOverdrive ? 1.62 : level >= 3 ? 1.38 : 1.0);
+    b.rail.material.opacity = level >= 3 || isOverdrive ? 0.96 : 0.74;
+    b.rail2.visible = level >= 3 || isOverdrive || isCrimson;
+    b.rail2.material.color.set(ring2Col);
+    b.rail2.scale.setScalar(isPlasma || isOverdrive ? 1.35 : 1.12);
+    const sw = isPlasma || isOverdrive ? 1.44 : level >= 3 ? 1.24 : level === 2 ? 1.08 : 0.96;
+    const sl = isPlasma || isOverdrive ? 1.34 : level >= 3 ? 1.18 : 1.0;
+    b.sheath.scale.set(sw, sw, sl);
     return b;
   }
 
@@ -225,7 +242,7 @@ export class Projectiles {
     return b;
   }
 
-  fireCharge(from, target, vx = 0, vy = 0) {
+  fireCharge(from, target, vx = 0, vy = 0, opts = null) {
     const c = this.charges.find((l) => !l.active);
     if (!c) return null;
     c.active = true; c.mesh.visible = true;
@@ -234,6 +251,13 @@ export class Projectiles {
     c.target = target;
     c.life = 2.5;
     c.trailCd = 0;
+    c.dmgMul = opts?.dmgMul ?? 1;
+    c.radMul = opts?.radMul ?? 1;
+    const col = opts?.crimson ? 0xff5a80 : opts?.overdrive ? 0xffe268 : 0x59c6ff;
+    c.trailCol = col;
+    c.halo.material.color.set(col);
+    c.gyroA.material.color.set(opts?.crimson ? 0xff92a8 : opts?.overdrive ? 0xfff0a0 : 0x70ecff);
+    c.mesh.scale.setScalar(0.95 + (c.radMul - 1) * 0.55);
     return c;
   }
 
@@ -251,7 +275,7 @@ export class Projectiles {
    * Fire an enemy bullet. `dir` is a direction (any length); the preset's speed
    * is applied unless `speedOverride` is given. `type` selects a BULLET preset.
    */
-  fireEnemy(from, dir, type = 'orb', speedOverride = null, targetWingmate = null) {
+  fireEnemy(from, dir, type = 'orb', speedOverride = null, targetWingmate = null, extra = null) {
     const b = this._alloc(this.ebullets, '_ebulletHead');
     if (!b) return null;
     const legacyColor = typeof type === 'number' ? type : null;   // bosses pass a raw colour
@@ -261,6 +285,7 @@ export class Projectiles {
 
     b.active = true; b.mesh.visible = true; b.deflected = false;
     b.btype = key; b.shape = shape; b.targetWingmate = targetWingmate;
+    b.age = 0;
     b.mesh.position.copy(from);
     const spd = speedOverride ?? (legacyColor !== null ? dir.length() : T.speed);
     b.vel.copy(dir).normalize().multiplyScalar(spd);
@@ -283,9 +308,11 @@ export class Projectiles {
       b.shell.visible = true; b.shell.scale.set(0.85, 0.85, 1.85); b.shell.material.color.set(coreCol);
       b.collar.visible = true; b.collar.scale.setScalar(1.0); b.collar.material.color.set(haloCol);
     } else if (shape === 'bolt') {
-      b.core.scale.setScalar(0.68);
-      b.shell.visible = true; b.shell.scale.set(0.46, 0.46, 2.35); b.shell.material.color.set(coreCol);
-      b.ring.visible = true; b.ring.scale.setScalar(0.68); b.ring.material.color.set(haloCol);
+      const isRail = key === 'rail';
+      b.core.scale.setScalar(isRail ? 0.92 : 0.68);
+      b.shell.visible = true; b.shell.scale.set(isRail ? 0.62 : 0.46, isRail ? 0.62 : 0.46, isRail ? 4.4 : 2.35); b.shell.material.color.set(coreCol);
+      b.ring.visible = true; b.ring.scale.setScalar(isRail ? 1.15 : 0.68); b.ring.material.color.set(haloCol);
+      if (isRail) { b.ring2.visible = true; b.ring2.scale.setScalar(0.88); b.ring2.material.color.set(coreCol); }
     } else if (shape === 'shell') {
       b.core.scale.setScalar(1.45);
       b.shell.visible = true; b.shell.scale.set(1.65, 1.65, 1.95); b.shell.material.color.set(coreCol);
@@ -316,6 +343,13 @@ export class Projectiles {
 
     b.radius = legacyColor !== null ? 0.9 : T.r;
     b.homing = legacyColor === null && !!T.homing;
+    b.shootable = legacyColor === null && !!(T.homing || T.shootable);
+    b.splitT = legacyColor === null ? (extra?.splitT ?? T.splitTime ?? 0) : 0;
+    b.helixR = legacyColor === null ? (extra?.helixR ?? T.helixR ?? 0) : 0;
+    b.helixFreq = legacyColor === null ? (extra?.helixFreq ?? T.helixFreq ?? 0) : 0;
+    b.helixPhase = extra?.helixPhase ?? 0;
+    b.gravity = legacyColor === null ? (extra?.gravity ?? T.gravity ?? 0) : 0;
+    b.curveX = extra?.curveX ?? 0;
     b.spin = shape === 'orb' || shape === 'ring' || shape === 'spike';
     b.life = 8;
     audio.enemyFire(key);   // throttled inside audio so a volley = one report
@@ -340,6 +374,10 @@ export class Projectiles {
       }
       if (b.rail2.visible) {
         b.rail2.rotation.z -= dt * 16;
+        if (particles?.missileTrail && Math.random() < 0.35) {
+          const tCol = b.style === 'overdrive' ? 0xffe268 : b.style === 'crimson' ? 0xff5a80 : b.level >= 4 ? 0xffcc55 : 0x62dcff;
+          particles.missileTrail(b.mesh.position.x, b.mesh.position.y, b.mesh.position.z + 2.2, tCol, true);
+        }
       }
       b.life -= dt;
       if (b.life <= 0 || b.mesh.position.z < -900) { b.active = false; b.mesh.visible = false; }
@@ -367,7 +405,7 @@ export class Projectiles {
         c.trailCd -= dt;
         if (c.trailCd <= 0) {
           c.trailCd = 0.022;
-          particles.missileTrail(c.mesh.position.x, c.mesh.position.y, c.mesh.position.z, 0x62d8ff, true);
+          particles.missileTrail(c.mesh.position.x, c.mesh.position.y, c.mesh.position.z, c.trailCol ?? 0x62d8ff, true);
         }
       }
       c.life -= dt;
@@ -378,10 +416,15 @@ export class Projectiles {
       b.mesh.position.addScaledVector(b.vel, dt);
       b.mesh.rotation.y += dt * 6; b.mesh.rotation.x += dt * 3.5;
       b.core.material.color.setRGB(1, 0.85 + Math.sin(now * 0.03) * 0.15, 0.6);
+      if (particles?.missileTrail && Math.random() < 0.65) {
+        particles.missileTrail(b.mesh.position.x, b.mesh.position.y, b.mesh.position.z + 1.8, 0xffaa44, true);
+      }
       b.fuse -= dt;
     }
     for (const b of this.ebullets) {
       if (!b.active) continue;
+      const prevAge = b.age;
+      b.age += dt;
       // Homing bullets follow their assigned wingmate when one was selected;
       // all other shots retain the player as their target.
       // Deflected bullets fly back toward enemies without player-homing pull
@@ -392,37 +435,83 @@ export class Projectiles {
         _v1.sub(b.mesh.position);
         if (_v1.lengthSq() > 1) {
           const spd = b.vel.length();
-          b.vel.lerp(_v1.normalize().multiplyScalar(spd), Math.min(1, dt * 1.6));
+          const turn = BULLET[b.btype]?.turnRate ?? 1.6;
+          b.vel.lerp(_v1.normalize().multiplyScalar(spd), Math.min(1, dt * turn));
           b.vel.setLength(spd);
           b.mesh.lookAt(_v1.copy(b.mesh.position).add(b.vel));
         }
       }
+      // Parabolic artillery mortar gravity & boomerang lateral arc acceleration
+      if (!b.deflected) {
+        if (b.gravity !== 0) {
+          b.vel.y += b.gravity * dt;
+          b.mesh.lookAt(_v1.copy(b.mesh.position).add(b.vel));
+        }
+        if (b.curveX !== 0) {
+          b.vel.x += b.curveX * dt;
+        }
+      }
       b.mesh.position.addScaledVector(b.vel, dt);
+      // Exact dt-invariant 3D DNA-helix corkscrew displacement for `spiral` rounds!
+      if (!b.deflected && b.helixR > 0 && b.helixFreq > 0) {
+        const a0 = prevAge * b.helixFreq + b.helixPhase;
+        const a1 = b.age * b.helixFreq + b.helixPhase;
+        b.mesh.position.x += b.helixR * (Math.cos(a1) - Math.cos(a0));
+        b.mesh.position.y += b.helixR * (Math.sin(a1) - Math.sin(a0));
+      }
       b.mesh.position.z += scroll * dt * 0.35;
+
+      // Airburst Cluster Shell mid-air split into 5 radial shard sub-munitions!
+      if (!b.deflected && b.splitT > 0) {
+        b.splitT -= dt;
+        const pz = b.mesh.position.z;
+        if ((b.splitT <= 0 || (pz > -64 && pz < -28)) && pz < -24) {
+          const ox = b.mesh.position.x, oy = b.mesh.position.y, oz = pz;
+          b.active = false; b.mesh.visible = false; b.targetWingmate = null; b.splitT = 0;
+          if (particles) {
+            particles.flash(ox, oy, oz, 1.05, 0xff9a44);
+            particles.ring(ox, oy, oz, { color: 0xff6232, from: 2.0, radius: 16, dur: 0.34, opacity: 0.62 });
+            particles.sparks(ox, oy, oz, 0.72, 0xffd27a);
+          }
+          audio.impact('flak');
+          const orig = new THREE.Vector3(ox, oy, oz);
+          const aimX = player ? (player.x - ox) * 0.45 : 0;
+          const aimY = player ? (player.y - oy) * 0.45 : 0;
+          const spin = b.age * 2.1;
+          for (let k = 0; k < 5; k++) {
+            const a = (k / 5) * Math.PI * 2 + spin;
+            _v1.set(aimX + Math.cos(a) * 34, aimY + Math.sin(a) * 28, 86);
+            this.fireEnemy(orig, _v1, 'shard', 112);
+          }
+          continue;
+        }
+      }
+
       b.life -= dt;
       b.halo.material.rotation += dt * 4;
       if (b.ring.visible) {
-        b.ring.rotation.z += dt * (b.deflected ? 14 : 7);
+        b.ring.rotation.z += dt * (b.deflected ? 14 : b.btype === 'boomerang' ? 16 : 7);
         if (b.shape === 'ring' && !b.deflected) {
-          b.ring.rotation.x += dt * 4;
+          b.ring.rotation.x += dt * (b.btype === 'boomerang' ? 2 : 4);
         }
       }
       if (b.ring2.visible) {
         b.ring2.rotation.y -= dt * 8;
         b.ring2.rotation.z -= dt * 5;
       }
-      if (b.collar.visible) b.collar.rotation.z += dt * 7;
+      if (b.collar.visible) b.collar.rotation.z += dt * (b.btype === 'cluster' ? 14 : 7);
       if (b.spike.visible) b.spike.rotation.z += dt * 10;
-      if (b.shape === 'missile' && particles?.missileTrail) {
+      const hasTrail = b.shape === 'missile' || b.btype === 'pursuit' || b.btype === 'cluster' || b.btype === 'spiral' || b.btype === 'rail' || b.btype === 'mortar' || b.btype === 'boomerang';
+      if (hasTrail && particles?.missileTrail) {
         b.trailCd -= dt;
         if (b.trailCd <= 0) {
-          b.trailCd = 0.042;
+          b.trailCd = b.btype === 'rail' ? 0.025 : b.btype === 'pursuit' || b.btype === 'spiral' ? 0.052 : 0.044;
           const p = b.mesh.position;
-          particles.missileTrail(p.x, p.y, p.z, b.deflected ? 0x66fff0 : (BULLET[b.btype]?.trail ?? 0xff7a3a), b.deflected);
+          particles.missileTrail(p.x, p.y, p.z, b.deflected ? 0x66fff0 : (BULLET[b.btype]?.trail ?? 0xff7a3a), b.deflected || b.btype === 'rail' || b.btype === 'spiral' || b.btype === 'boomerang');
         }
       }
       if (b.trail.visible) b.trail.material.opacity = 0.65 + Math.sin(now * 0.05 + b.mesh.id) * 0.3;   // flickering tracer/exhaust
-      if (b.mesh.position.z > 40 || b.mesh.position.z < -1000 || b.life <= 0) { b.active = false; b.mesh.visible = false; b.targetWingmate = null; }
+      if (b.mesh.position.z > 40 || b.mesh.position.z < -1000 || b.mesh.position.y < -30 || b.life <= 0) { b.active = false; b.mesh.visible = false; b.targetWingmate = null; }
     }
   }
 }

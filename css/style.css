@@ -1425,3 +1425,147 @@ body.touch-device #bomb-prompt .bp-key { display: none; }
 }
 .opt-toggle.opt-cycle { min-width: 108px; letter-spacing: 1.6px; }
 body.touch-device #perf-badge { right: auto; left: 16px; bottom: auto; top: 106px; font-size: 9px; padding: 3px 7px; }
+
+/* ---------- v73 Armory Upgrade Screen, HUD Build Badges & Chain Popups ---------- */
+.pip.lv4.on {
+  filter: drop-shadow(0 0 8px rgba(255, 214, 72, .95)) saturate(1.4);
+}
+#bar-hp.overcap {
+  border-color: #ffe078;
+  box-shadow: 0 0 12px rgba(255, 214, 92, .45);
+}
+#upgrade-badges {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; max-width: 280px; pointer-events: none;
+}
+.upg-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px; border-radius: 5px;
+  background: rgba(16, 22, 58, .82);
+  border: 1px solid var(--upg-col, #78d8ff);
+  color: var(--upg-col, #dcf6ff);
+  font-family: 'Exo 2'; font-weight: 900; font-size: 9px; letter-spacing: 1px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .9);
+  box-shadow: 0 0 8px rgba(0, 0, 0, .35);
+}
+.upg-badge.trophy {
+  background: linear-gradient(120deg, rgba(118, 22, 52, .92), rgba(44, 16, 48, .92));
+  border-color: #ff6284; color: #ffd4df;
+  box-shadow: 0 0 10px rgba(255, 72, 114, .55);
+}
+.upg-badge.overdrive {
+  background: linear-gradient(120deg, rgba(255, 214, 76, .95), rgba(255, 142, 46, .92));
+  border-color: #fff6c2; color: #1b1230;
+  text-shadow: none;
+  box-shadow: 0 0 14px rgba(255, 214, 76, .85);
+  animation: overdrivePulse .45s ease-in-out infinite alternate;
+}
+@keyframes overdrivePulse { from { transform: scale(1); } to { transform: scale(1.06); } }
+
+#upgrade-screen {
+  position: absolute; inset: 0; z-index: 15;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 20px;
+  background: radial-gradient(ellipse at 50% 24%, rgba(56, 98, 178, .38), rgba(6, 8, 28, .88) 70%);
+  backdrop-filter: blur(4px);
+  animation: bannerIn .36s cubic-bezier(.2, 1.35, .4, 1);
+}
+.upgrade-kicker {
+  font-family: 'Exo 2'; font-weight: 800; font-size: clamp(10px, 1.15vw, 13px);
+  letter-spacing: clamp(3px, .45vw, 6px); color: #8de6ff;
+  text-shadow: 0 0 10px rgba(86, 216, 255, .6);
+}
+.upgrade-title {
+  font-family: 'Exo 2'; font-weight: 900; font-size: clamp(28px, 4.4vw, 52px);
+  letter-spacing: clamp(3px, .65vw, 9px); line-height: 1; color: #ffe48a;
+  text-shadow: 0 0 22px rgba(255, 198, 74, .75), 0 4px 0 #7a3c12;
+  text-align: center;
+}
+.upgrade-sub {
+  font-family: 'Exo 2'; font-weight: 700; font-size: clamp(12px, 1.3vw, 16px);
+  letter-spacing: 1.6px; color: #cde2ff; text-align: center;
+}
+.upgrade-cards {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px; width: min(980px, 92vw); margin-top: 8px;
+}
+.upgrade-card {
+  position: relative; display: flex; flex-direction: column; gap: 10px;
+  padding: 20px 20px 22px; border-radius: 16px; cursor: pointer; pointer-events: auto;
+  background: linear-gradient(155deg, rgba(28, 34, 88, .96), rgba(12, 16, 48, .96));
+  border: 2.5px solid rgba(116, 174, 245, .62);
+  box-shadow: 0 12px 34px rgba(0, 0, 18, .62), inset 0 1px 0 rgba(255, 255, 255, .14);
+  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
+  text-align: left;
+}
+.upgrade-card:hover, .upgrade-card:focus-visible {
+  outline: none;
+  transform: translateY(-7px) scale(1.025);
+  border-color: var(--card-accent, #ffe078);
+  box-shadow: 0 18px 42px rgba(0, 0, 18, .72), 0 0 24px color-mix(in srgb, var(--card-accent, #ffe078) 42%, transparent);
+}
+.upgrade-card.cat-trophy {
+  background: linear-gradient(155deg, rgba(88, 22, 54, .96), rgba(26, 12, 42, .96));
+  border-color: #ff6284;
+  box-shadow: 0 12px 36px rgba(120, 12, 46, .55), 0 0 18px rgba(255, 82, 118, .32);
+}
+.upgrade-card-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.upgrade-key {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 24px; padding: 0 9px; border-radius: 7px;
+  background: var(--card-accent, #ffd866); color: #121636;
+  font-family: 'Exo 2'; font-weight: 900; font-size: 13px; letter-spacing: 1px;
+}
+.upgrade-cat {
+  font-family: 'Exo 2'; font-weight: 800; font-size: 10px; letter-spacing: 2px;
+  color: var(--card-accent, #9ee8ff); opacity: .95;
+}
+.upgrade-head {
+  display: flex; align-items: center; gap: 11px; margin-top: 2px;
+}
+.upgrade-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 42px; height: 42px; border-radius: 11px; flex-shrink: 0;
+  background: rgba(10, 14, 42, .78); border: 1.5px solid var(--card-accent, #8de6ff);
+  color: var(--card-accent, #ffe078); font-size: 22px;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--card-accent, #8de6ff) 32%, transparent);
+}
+.upgrade-name {
+  font-family: 'Exo 2'; font-weight: 900; font-size: clamp(15px, 1.6vw, 20px);
+  letter-spacing: 1.4px; line-height: 1.12; color: #fff;
+}
+.upgrade-rank {
+  font-family: 'Exo 2'; font-weight: 800; font-size: 11px; letter-spacing: 1.5px;
+  color: #a9c6ec; margin-top: 3px;
+}
+.upgrade-rank b { color: var(--card-accent, #ffe078); }
+.upgrade-desc {
+  font-weight: 700; font-size: clamp(12px, 1.15vw, 14.5px);
+  line-height: 1.46; color: #d0def8;
+}
+.upgrade-desc b { color: #fff3b8; }
+.upgrade-foot {
+  margin-top: 4px; font-family: 'Exo 2'; font-weight: 800; font-size: 12px;
+  letter-spacing: 2.2px; color: #9eb9e2;
+}
+.upgrade-foot b { color: #ffe082; }
+
+.kill-pop.squad-wipe {
+  font-size: 26px; color: #78ffd2;
+  text-shadow: 0 0 20px rgba(72, 255, 198, .95), 0 2px 6px rgba(0, 0, 0, .95);
+}
+.kill-pop.squad-wipe small { color: #ffe682; }
+.kill-pop.ring-chain {
+  font-size: 25px; color: #fff19c;
+  text-shadow: 0 0 22px rgba(255, 210, 74, 1), 0 2px 6px rgba(0, 0, 0, .95);
+}
+.kill-pop.ring-chain small { color: #84f6ff; }
+
+@media (max-width: 780px) {
+  .upgrade-cards { grid-template-columns: 1fr; gap: 10px; max-height: 68vh; overflow-y: auto; }
+  .upgrade-card { padding: 13px 15px; gap: 7px; }
+  .upgrade-icon { width: 34px; height: 34px; font-size: 18px; }
+  #upgrade-badges { max-width: 190px; }
+  .upg-badge { font-size: 8px; padding: 1px 5px; }
+}

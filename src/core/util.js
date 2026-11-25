@@ -29,7 +29,7 @@ export function toonGradient() {
 }
 
 export function toonMat(color, opts = {}) {
-  const m = new THREE.MeshToonMaterial({
+  const cfg = {
     color, gradientMap: toonGradient(),
     emissive: opts.emissive ?? 0x000000,
     emissiveIntensity: opts.emissiveIntensity ?? 1,
@@ -37,7 +37,14 @@ export function toonMat(color, opts = {}) {
     opacity: opts.opacity ?? 1,
     side: opts.side ?? THREE.FrontSide,
     fog: opts.fog ?? true,
-  });
+  };
+  if (opts.map) cfg.map = opts.map;
+  if (opts.emissiveMap) cfg.emissiveMap = opts.emissiveMap;
+  if (opts.normalMap) {
+    cfg.normalMap = opts.normalMap;
+    cfg.normalScale = opts.normalScale ?? new THREE.Vector2(0.45, 0.45);
+  }
+  const m = new THREE.MeshToonMaterial(cfg);
   if (opts.flat) m.flatShading = true;
   return m;
 }
@@ -67,13 +74,24 @@ export function dotTexture() {
  * populates once the image decodes.
  */
 export function loadDetailTexture(url, opts = {}) {
-  const tex = new THREE.Texture();
+  // Neutral 2x2 fallback so WebGL never flashes black while the JPG decodes
+  let initImg = null;
+  if (typeof document !== 'undefined') {
+    const ph = document.createElement('canvas');
+    ph.width = ph.height = 2;
+    const pg = ph.getContext('2d');
+    pg.fillStyle = '#dcdcdc';
+    pg.fillRect(0, 0, 2, 2);
+    initImg = ph;
+  }
+  const tex = initImg ? new THREE.CanvasTexture(initImg) : new THREE.Texture();
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
   const rep = opts.repeat ?? 1;
   tex.repeat.set(rep, rep);
   const size = opts.size ?? 512;
+  const targetMean = opts.targetMean ?? null;
   const brightness = opts.brightness ?? 1.7;
   const contrast = opts.contrast ?? 0.72;
   const desat = opts.desat ?? 0.55;
@@ -85,21 +103,37 @@ export function loadDetailTexture(url, opts = {}) {
     g.drawImage(img, 0, 0, size, size);
     const id = g.getImageData(0, 0, size, size);
     const d = id.data;
+    // Optional auto-leveling around targetMean preserves crisp geological grain
+    // without blowing highlights to pure white or crushing dark volcanic basalt!
+    let meanLum = 128;
+    if (targetMean !== null) {
+      let sum = 0;
+      const n = d.length / 4;
+      for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      meanLum = Math.max(18, sum / Math.max(1, n));
+    }
     for (let i = 0; i < d.length; i += 4) {
       let r = d[i], gg = d[i + 1], b = d[i + 2];
       const lum = 0.299 * r + 0.587 * gg + 0.114 * b;
       r = lum + (r - lum) * (1 - desat);
       gg = lum + (gg - lum) * (1 - desat);
       b = lum + (b - lum) * (1 - desat);
-      r = (r - 128) * contrast + 128; gg = (gg - 128) * contrast + 128; b = (b - 128) * contrast + 128;
-      r *= brightness; gg *= brightness; b *= brightness;
+      if (targetMean !== null) {
+        const gain = targetMean / meanLum;
+        r = (r - meanLum) * contrast * Math.min(2.2, gain) + targetMean;
+        gg = (gg - meanLum) * contrast * Math.min(2.2, gain) + targetMean;
+        b = (b - meanLum) * contrast * Math.min(2.2, gain) + targetMean;
+      } else {
+        r = (r - 128) * contrast + 128; gg = (gg - 128) * contrast + 128; b = (b - 128) * contrast + 128;
+        r *= brightness; gg *= brightness; b *= brightness;
+      }
       d[i] = clamp(r, 0, 255); d[i + 1] = clamp(gg, 0, 255); d[i + 2] = clamp(b, 0, 255);
     }
     g.putImageData(id, 0, 0);
     tex.image = c;
     tex.needsUpdate = true;
   };
-  img.onerror = () => { /* leave blank; materials still show vertex colours */ };
+  img.onerror = () => { /* keep clean neutral detail fallback */ };
   img.src = url;
   return tex;
 }

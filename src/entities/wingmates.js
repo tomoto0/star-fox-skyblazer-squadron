@@ -422,12 +422,26 @@ class Wingmate {
     const loop = this._loopT > 0 ? (1 - this._loopT / 0.9) * TAU : (d.role === 'cover' ? Math.sin(t * 0.4 + this.phase) * 0.35 : 0);
     this.mesh.rotation.set(clamp(this.vy * 0.0048, -0.48, 0.48), 0, bank + loop, 'ZYX');
 
-    const gg = this.mesh.userData.engineGlow;
-    if (gg) gg.scale.setScalar(0.88 + Math.sin(t * 8 + this.phase) * 0.1);
-    const plumes = this.mesh.userData.enginePlumes;
+    const ud = this.mesh.userData;
+    const gg = ud.engineGlow;
+    if (gg) gg.scale.setScalar(0.88 + Math.sin(t * 8 + this.phase) * 0.1 + (this.state === 'engage' ? 0.14 : 0));
+    const plumes = ud.enginePlumes;
     if (plumes) {
-      const pLen = 0.85 + Math.sin(t * 44 + this.phase) * 0.14 + (this.state === 'engage' ? 0.25 : 0);
-      for (const pl of plumes) pl.scale.set(0.9, 0.9, pLen);
+      const pLen = 0.88 + Math.sin(t * 44 + this.phase) * 0.15 + (this.state === 'engage' ? 0.32 : 0);
+      for (const pl of plumes) pl.scale.set(0.92, 0.92, pLen);
+    }
+    if (ud.turbineRing) ud.turbineRing.rotation.z += dt * (this.state === 'engage' ? 11.5 : 5.5);
+    if (ud.enginePetals) for (const p of ud.enginePetals) p.scale.setScalar(this.state === 'engage' ? 1.08 : 0.96);
+    if (ud.flapL && ud.flapR) {
+      const rIn = clamp(this.vx / 95, -1, 1), pIn = clamp(this.vy / 80, -1, 1);
+      ud.flapL.rotation.x = damp(ud.flapL.rotation.x, -pIn * 0.42 - rIn * 0.46, 12, dt);
+      ud.flapR.rotation.x = damp(ud.flapR.rotation.x, -pIn * 0.42 + rIn * 0.46, 12, dt);
+    }
+    if (ud.weaponPods) {
+      for (const wp of ud.weaponPods) {
+        wp.coilMat.emissive.setHex(this.color);
+        wp.muzzle.material.color.setHex(this.color);
+      }
     }
 
     this._updateTrails();
@@ -438,12 +452,13 @@ class Wingmate {
       if (tgt) {
         if (Math.random() < d.burstChance) {
           this.fireCd = rand(1.6, 2.5);
-          this._burst(tgt.mesh.position, proj, 4 + (Math.random() * 3 | 0));
+          this._burst(tgt.mesh.position, proj, 4 + (Math.random() * 3 | 0), game);
         } else {
           this.fireCd = rand(d.fireGap[0], d.fireGap[1]) * (this.state === 'engage' ? 0.72 : 1);
           _v1.copy(tgt.mesh.position); _v1.z -= 4;
           proj.fireAlly(this.mesh.position, _v1, this.color);
-          audio.laser(1);
+          game?.particles?.muzzle?.(this.x, this.y, this.z - 4.2, 0.72, this.color);
+          audio.allyLaser();
         }
       } else this.fireCd = rand(0.6, 1.1);
     }
@@ -500,7 +515,7 @@ class Wingmate {
     this.wp.set(x, rand(minY, Math.max(minY + 8, d.yBand[1])), tz);
   }
 
-  _burst(targetPos, proj, n) {
+  _burst(targetPos, proj, n, game = null) {
     const ax = targetPos.x, ay = targetPos.y, az = targetPos.z - 4;
     for (let k = 0; k < n; k++) {
       this._burstQueue.push({
@@ -508,7 +523,8 @@ class Wingmate {
         fn: () => {
           _v1.set(ax + rand(-3, 3), ay + rand(-3, 3), az);
           proj.fireAlly(this.mesh.position, _v1, this.color);
-          audio.laser(1);
+          game?.particles?.muzzle?.(this.x, this.y, this.z - 4.2, 0.68, this.color);
+          audio.allyLaser();
         },
       });
     }
@@ -528,7 +544,8 @@ class Wingmate {
           fn: () => {
             _v1.set(player.x + rand(-40, 40), player.y + rand(-10, 26), PLAYER_Z - 110);
             proj.fireAlly(this.mesh.position, _v1, this.color);
-            audio.laser(1);
+            game?.particles?.muzzle?.(this.x, this.y, this.z - 4.2, 0.72, this.color);
+            audio.allyLaser();
           },
         });
       }
@@ -540,7 +557,8 @@ class Wingmate {
         _v1.set(this.mesh.position.x + k * 22, this.mesh.position.y + 6, this.mesh.position.z - 110);
         proj.fireAlly(this.mesh.position, _v1, this.color);
       }
-      audio.laser(2);
+      game?.particles?.muzzle?.(this.x, this.y, this.z - 4.2, 0.95, this.color);
+      audio.allyLaser();
     } else if (d.special === 'loopbomb') {
       const cluster = this._cluster(enemies);
       const tgt = cluster || _v1.set(player.x, player.y + 6, PLAYER_Z - 85).clone();

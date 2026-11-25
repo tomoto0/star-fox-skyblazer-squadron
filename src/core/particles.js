@@ -273,31 +273,69 @@ export class Particles {
     this.ring(x, y, z, { color, radius: 4.8 * scale, dur: 0.22, from: 0.6, opacity: 0.42 });
   }
 
-  /** Player laser contact: hot-white core flash, dual concentric plasma rings & precision armour sparks */
+  /** Aerodynamic Mach shock-ring shed behind the Arwing when igniting or sustaining Boost! */
+  boostRing(x, y, z, color = 0x7beeff, scale = 1) {
+    this.ring(x, y, z, { color, radius: 11.5 * scale, dur: 0.26, from: 2.2 * scale, opacity: 0.56 });
+    this.emit(x, y, z, {
+      count: 6, speed: 12 * scale, vz: 58 * scale, color: 0xffffff, color2: color,
+      life: 0.24, size: 1.8 * scale, drag: 2.0, spread: 1.6 * scale,
+    });
+  }
+
+  /** Electric Star Fox barrel-roll counter-deflection starburst + double expanding shield rings! */
+  deflectBurst(x, y, z) {
+    this.flash(x, y, z, 0.72, 0xa8fff6);
+    this._spawnSprite(true, this.tex.spark[3], x, y, z, {
+      color: 0xffffff, life: 0.22, s0: 3.0, s1: 12.5, o0: 0.98, spin: 8, ease: 0.42,
+    });
+    this.ring(x, y, z, { color: 0xffffff, radius: 7.5, dur: 0.20, from: 1.0, opacity: 0.78 });
+    this.ring(x, y, z, { color: 0x62fff0, radius: 13.5, dur: 0.34, from: 1.6, opacity: 0.58 });
+    this.emit(x, y, z, {
+      count: 14, speed: 34, color: 0xffffff, color2: 0x66fff0,
+      life: 0.34, size: 2.2, drag: 2.2, spread: 0.8,
+    });
+  }
+
+  /** Inward-converging cyan energy motes pulled into the Arwing nose while charging! */
+  chargeGather(x, y, z, chargeK = 0.5) {
+    const n = chargeK > 0.85 ? 4 : 2;
+    for (let i = 0; i < n; i++) {
+      const a = rand(TAU), b = rand(-0.9, 0.9), r = 3.2 + rand(0, 2.2);
+      const ox = Math.cos(a) * Math.cos(b) * r;
+      const oy = Math.sin(b) * r;
+      const oz = Math.sin(a) * Math.cos(b) * r;
+      this.emit(x + ox, y + oy, z + oz, {
+        count: 1, speed: 0.5, vx: -ox * 4.2, vy: -oy * 4.2, vz: -oz * 4.2,
+        color: chargeK > 0.92 ? 0xffffff : 0x70ecff, color2: 0x59c6ff,
+        life: 0.20, size: 1.6 + chargeK * 0.9, drag: 0.5, spread: 0.1,
+      });
+    }
+  }
+
+  /** Player laser contact: hot-white core flash, dual concentric plasma rings & directional armour sparks */
   laserImpact(x, y, z, level = 1, weak = false) {
     const hyper = level >= 3;
     const col = hyper ? 0x62ccff : level === 2 ? 0x56ffc6 : 0x9effe2;
-    const scale = weak ? 1.5 : 1 + level * 0.14;
-    this.flash(x, y, z, (weak ? 0.88 : 0.52) + level * 0.10, weak ? 0xffffff : col);
+    const scale = weak ? 1.55 : 1 + level * 0.15;
+    this.flash(x, y, z, (weak ? 0.92 : 0.56) + level * 0.11, weak ? 0xffffff : col);
     this._spawnSprite(true, this.tex.spark[3], x, y, z, {
-      color: 0xffffff, life: 0.18, s0: 2.4 * scale, s1: 9.2 * scale, o0: 0.96, spin: rand(-5, 5), ease: 0.42,
+      color: 0xffffff, life: 0.19, s0: 2.6 * scale, s1: 9.8 * scale, o0: 0.98, spin: rand(-6, 6), ease: 0.42,
     });
-    this.sparks(x, y, z, (weak ? 0.78 : 0.50) * scale, weak ? 0xffffff : col);
+    this.sparks(x, y, z, (weak ? 0.82 : 0.52) * scale, weak ? 0xffffff : col);
     this.emit(x, y, z, {
-      count: (weak ? 12 : 8) + level * 2, speed: weak ? 34 : 25,
-      color: 0xffffff, color2: col, life: weak ? 0.42 : 0.30,
-      size: weak ? 2.5 : 1.95, drag: 2.5, spread: 0.48,
+      count: (weak ? 14 : 9) + level * 2, speed: weak ? 36 : 26, vz: 26,
+      color: 0xffffff, color2: col, life: weak ? 0.44 : 0.32,
+      size: weak ? 2.6 : 2.0, drag: 2.4, spread: 0.52,
     });
-    // Dual concentric shock rings (fast hot-white inner + colored outer wave)
-    this.ring(x, y, z, { color: 0xffffff, radius: weak ? 8.5 : 4.8 + level * 0.7, dur: 0.18, from: 0.7, opacity: weak ? 0.68 : 0.50 });
-    this.ring(x, y, z, { color: col, radius: weak ? 14.5 : 8.2 + level, dur: weak ? 0.40 : 0.28, from: 1.2, opacity: weak ? 0.54 : 0.38 });
+    this.ring(x, y, z, { color: 0xffffff, radius: weak ? 8.8 : 5.0 + level * 0.7, dur: 0.18, from: 0.7, opacity: weak ? 0.72 : 0.52 });
+    this.ring(x, y, z, { color: col, radius: weak ? 15.0 : 8.5 + level, dur: weak ? 0.42 : 0.28, from: 1.2, opacity: weak ? 0.56 : 0.40 });
   }
 
   /** small detonation when an enemy round hits the player / scenery — tinted per weapon */
   impact(x, y, z, type = 'orb', s = 1) {
-    const heavy = type === 'heavy' || type === 'flak' || type === 'missile' || type === 'homing';
-    const energy = type === 'plasma' || type === 'wave' || type === 'venom';
-    const col = energy ? (type === 'venom' ? 0x9be23a : 0x6a9bff) : 0xffb060;
+    const heavy = type === 'heavy' || type === 'flak' || type === 'missile' || type === 'homing' || type === 'swarm' || type === 'torpedo' || type === 'cluster' || type === 'mortar';
+    const energy = type === 'plasma' || type === 'wave' || type === 'superwave' || type === 'venom' || type === 'pursuit' || type === 'spiral' || type === 'rail' || type === 'boomerang';
+    const col = energy ? (type === 'venom' ? 0x9be23a : type === 'spiral' ? 0x26f5c2 : type === 'boomerang' || type === 'pursuit' ? 0xd064ff : type === 'superwave' ? 0xffb84a : 0x6a9bff) : 0xffb060;
     this.flash(x, y, z, (heavy ? 0.9 : 0.5) * s, energy ? col : 0xfff2c8);
     if (heavy) { this.fireball(x, y, z, 0.6 * s, 0xffb070); this.sparks(x, y, z, 0.7 * s); }
     else this.sparks(x, y, z, (energy ? 0.5 : 0.4) * s, energy ? col : 0xffe6a0);
@@ -350,17 +388,20 @@ export class Particles {
   explosion(x, y, z, big = false, scaleMul = 1) {
     const m = scaleMul;
     const s = (big ? 2.8 : 1.35) * m;
-    // Multi-layered fiery detonation scaled for visceral close-range impact!
-    this.flash(x, y, z, (big ? 2.7 : 1.45) * m);
+    // Multi-layered fiery detonation + crisp cross-star flash & rising thermal embers!
+    this.flash(x, y, z, (big ? 2.8 : 1.5) * m);
+    this._spawnSprite(true, this.tex.spark[3], x, y, z, {
+      color: 0xffffff, life: big ? 0.32 : 0.20, s0: (big ? 8 : 4.2) * m, s1: (big ? 38 : 18) * m, o0: 0.98, spin: rand(-4, 4), ease: 0.38,
+    });
     this.fireball(x, y, z, (big ? 2.9 : 1.65) * m);
     this.smoke(x, y, z, (big ? 2.5 : 1.3) * m);
     this.sparks(x, y, z, (big ? 2.3 : 1.35) * m);
-    // Fiery inner embers + fast flying glow sparks
+    // Fiery inner embers + buoyant rising sparks
     this.emit(x, y, z, { count: Math.round((big ? 28 : 14) * Math.min(m, 1.4)), speed: 34 * s, color: 0xfff5b8, color2: 0xff8028, life: 0.65, size: 4.0 * s, drag: 2.3 });
-    this.emit(x, y, z, { count: Math.round((big ? 18 : 9) * Math.min(m, 1.4)), speed: 19 * s, color: 0xff5a28, color2: 0x992010, life: 1.05, size: 5.2 * s, drag: 1.7 });
-    // Crisp dual-plane shockwave rings (vertical plasma flash + horizontal blast wave on big kills!)
-    this.ring(x, y, z, { color: big ? 0xfff5e0 : 0xffbe74, radius: (big ? 80 : 32) * m, dur: big ? 0.44 : 0.30, from: big ? 4 : 2, opacity: big ? 0.48 : 0.38 });
-    this.ring(x, y, z, { color: big ? 0xff9248 : 0xffe8b4, radius: (big ? 58 : 22) * m, dur: big ? 0.52 : 0.26, from: 1.5, horizontal: true, opacity: big ? 0.36 : 0.28 });
+    this.emit(x, y, z, { count: Math.round((big ? 18 : 9) * Math.min(m, 1.4)), speed: 19 * s, vy: 12 * m, gravity: 14, color: 0xffaa44, color2: 0xff4818, life: 1.15, size: 3.4 * s, drag: 1.5 });
+    // Crisp dual-plane shockwave rings
+    this.ring(x, y, z, { color: big ? 0xfff5e0 : 0xffbe74, radius: (big ? 82 : 34) * m, dur: big ? 0.44 : 0.30, from: big ? 4 : 2, opacity: big ? 0.52 : 0.40 });
+    this.ring(x, y, z, { color: big ? 0xff9248 : 0xffe8b4, radius: (big ? 60 : 24) * m, dur: big ? 0.52 : 0.26, from: 1.5, horizontal: true, opacity: big ? 0.38 : 0.30 });
     if (big) {
       this._after(0.08, () => { this.fireball(x + rand(-9, 9) * m, y + rand(2, 10) * m, z + rand(-6, 6), 2.2 * m); this.sparks(x, y, z, 1.5 * m); });
       this._after(0.19, () => { this.fireball(x + rand(-10, 10) * m, y + rand(6, 13) * m, z + rand(-6, 6), 1.9 * m); this.smoke(x, y + 6, z, 2.1 * m); });
@@ -409,9 +450,13 @@ export class Particles {
     this.emit(x, y, z, { count: Math.round(42 * s), speed: 28 * s, color: 0x4a2c22, color2: 0x241612, life: 2.2, size: 17 * s, drag: 1.05, gravity: 8, spread: 4.5 });
     // fast debris sparks
     this.emit(x, y, z, { count: Math.round(42 * s), speed: 120 * s, color: 0xffe6a0, color2: 0xff8040, life: 0.78, size: 2.6 * s, drag: 1.1, gravity: -34 });
-    // ---- blast waves: brief and translucent, fire/smoke carry the visual ----
-    this.ring(x, y, z, { color: 0xfff4e6, radius: 132 * s, dur: 0.42, from: 5, opacity: 0.38 });
-    this.ring(x, y, z, { color: 0xffdfba, radius: 172 * s, dur: 0.85, from: 6, horizontal: true, opacity: 0.26 });
+    // ---- blast waves: blinding nova cross-star + triple expanding rings ----
+    this._spawnSprite(true, this.tex.spark[3], x, y, z, {
+      color: 0xffffff, life: 0.44, s0: 14 * s, s1: 76 * s, o0: 1, spin: 2.5, ease: 0.36,
+    });
+    this.ring(x, y, z, { color: 0xfff4e6, radius: 138 * s, dur: 0.42, from: 5, opacity: 0.46 });
+    this.ring(x, y, z, { color: 0x9ceeff, radius: 110 * s, dur: 0.58, from: 4, opacity: 0.34 });
+    this.ring(x, y, z, { color: 0xffdfba, radius: 178 * s, dur: 0.85, from: 6, horizontal: true, opacity: 0.30 });
     // ---- staged rolling detonations + billowing column ----
     const roll = (dly, rad, size) => this._after(dly, () => {
       for (let i = 0; i < 3; i++) {

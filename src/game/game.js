@@ -22,6 +22,7 @@ import { Wingmates } from '../entities/wingmates.js';
 import { RivalDuel } from '../entities/rival.js';
 import { BOSS_BY_WAVE } from '../entities/bosses.js';
 import { WAVES, FINAL_WAVE } from './waves.js';
+import { createEmptyRanks, computeBuildStats, rollUpgradeChoices, formatUpgradeBadges } from './upgrades.js';
 import { Hud } from '../ui/hud.js';
 import { LeaderboardStore, formatRankScore, sanitizePilotName } from '../core/leaderboard.js';
 
@@ -146,7 +147,7 @@ export class Game {
       { id: 'high',     name: 'HIGH',     pixelCap: 1.50, bloomScale: 0.66, post: true,  ambientHz: 30, drawDistance: 1500, fxBudget: 1.00, hazeCount: 26, motes: true,  waterCpu: true,  showProps: true,  dynamicLight: true },
       { id: 'balanced', name: 'BALANCED', pixelCap: 1.20, bloomScale: 0.52, post: true,  ambientHz: 24, drawDistance: 1320, fxBudget: 0.85, hazeCount: 16, motes: true,  waterCpu: true,  showProps: true,  dynamicLight: true },
       { id: 'fast',     name: 'FAST',     pixelCap: 1.00, bloomScale: 0.40, post: false, ambientHz: 18, drawDistance: 1080, fxBudget: 0.60, hazeCount: 8,  motes: true,  waterCpu: false, showProps: true,  dynamicLight: true },
-      { id: 'lite',     name: 'LITE',     pixelCap: 0.85, bloomScale: 0.35, post: false, ambientHz: 12, drawDistance: 840,  fxBudget: 0.38, hazeCount: 0,  motes: false, waterCpu: false, showProps: false, dynamicLight: false },
+      { id: 'lite',     name: 'LITE',     pixelCap: 0.85, bloomScale: 0.35, post: false, ambientHz: 12, drawDistance: 840,  fxBudget: 0.38, hazeCount: 0,  motes: false, waterCpu: false, showProps: true,  dynamicLight: false },
     ];
     // Modest CPU/mobile devices start at FAST (Bloom OFF) in Auto mode so frame 1 is silky-smooth.
     const modestHw = (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) || this.input.touch.capable;
@@ -432,6 +433,8 @@ export class Game {
     $('leaderboard-screen').setAttribute('aria-hidden', 'true');
     $('rank-entry-screen').classList.add('hidden');
     $('rank-entry-screen').setAttribute('aria-hidden', 'true');
+    $('upgrade-screen')?.classList.add('hidden');
+    $('upgrade-screen')?.setAttribute('aria-hidden', 'true');
     this.hud.hide();
     this.input.setTouchEnabled(false);
     $('title-screen').classList.remove('hidden');
@@ -440,9 +443,30 @@ export class Game {
     audio.playTrack('title');
   }
 
+  _recomputeBuild() {
+    this.build = computeBuildStats(this.upgradeRanks, this.ringMaxHpBonus);
+    this.maxHp = this.build.maxHp;
+    this.hp = Math.min(this.hp, this.maxHp);
+    this.hud?.setUpgrades?.(formatUpgradeBadges(this.upgradeRanks), this.overdriveT);
+  }
+
   resetRun() {
     const veteran = this.runMode === 'afterburner';
-    this.score = 0; this.lives = veteran ? 4 : 3; this.hp = 100;
+    this.score = 0; this.lives = veteran ? 4 : 3;
+    this.upgradeRanks = createEmptyRanks();
+    this.ringMaxHpBonus = 0;
+    this.overdriveT = 0;
+    this._siphonKills = 0;
+    this._upgradeChoices = [];
+    this._upgradeNextWave = null;
+    if (veteran) {
+      // Veteran Afterburner+ deploys with Lv4 Plasma & Armor Piercer online for endgame HP!
+      this.upgradeRanks.overcharge = 1;
+      this.upgradeRanks.piercer = 1;
+    }
+    this.build = computeBuildStats(this.upgradeRanks, this.ringMaxHpBonus);
+    this.maxHp = this.build.maxHp;
+    this.hp = this.maxHp;
     this.stats = { kills: 0, shots: 0, hits: 0, rings: 0 };
     this.waveStats = { kills: 0, shots: 0, hits: 0, rings: 0 };
     this.combo = 0; this.comboTimer = 0; this.maxCombo = 0;
@@ -450,19 +474,32 @@ export class Game {
     this._pendingRankRun = null;
     this._rankEntryOffered = false;
     this._lastRankedEntryId = null;
-    this.player.laserLevel = veteran ? 3 : 1;
+    this.player.laserLevel = veteran ? 4 : 1;
     this.player.bombs = veteran ? 5 : 3;
     this.player.meter = 100;
+    this.hud?.setUpgrades?.(formatUpgradeBadges(this.upgradeRanks), 0);
   }
 
-  /** register a scored kill: build the combo chain + bonus */
-  _onKill(pos) {
+  /** register a scored kill: build the combo chain + bonus + Vampire shield siphon */
+  _onKill(pos, e = null) {
     this.combo++;
-    this.comboTimer = 2.6;
+    this.comboTimer = this.build?.comboDur ?? 2.6;
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     if (this.combo >= 2) {
-      this.addScore(this.combo * 5);           // escalating chain bonus
+      this.addScore(Math.round(this.combo * 5 * (this.build?.scoreMul ?? 1)));
       this.hud.setCombo(this.combo);
+    }
+    if (this.build?.siphonPerKills > 0) {
+      const heavy = e?.tier === 'heavy';
+      this._siphonKills++;
+      if (heavy || this._siphonKills >= this.build.siphonPerKills) {
+        if (!heavy) this._siphonKills = 0;
+        const before = this.hp;
+        this.hp = Math.min(this.maxHp, this.hp + this.build.siphonHeal);
+        if (this.hp > before && pos) {
+          this.particles.emit(this.player.x, this.player.y, PLAYER_Z, { count: 6, speed: 9, color: 0xff8fb8, life: 0.35, size: 1.8 });
+        }
+      }
     }
     if (pos) this.wingmates.onEnemyKilled(pos);
   }
@@ -471,25 +508,63 @@ export class Game {
     this.combo = 0; this.comboTimer = 0;
   }
 
-  /** loot drops scale with enemy toughness — keeps the harder waves survivable */
+  /** Smart tactical drop selector weighted by the player's live needs */
+  _pickSmartLoot(preferHigh = false) {
+    const P = this.player;
+    const lowHp = this.hp < this.maxHp * 0.60;
+    const needLaser = P.laserLevel < (this.build?.maxLaserLevel ?? 3);
+    const lowBombs = P.bombs < Math.min(3, this.build?.maxBombs ?? 5);
+    const pool = [];
+    if (lowHp) pool.push('health', 'health', 'health');
+    else pool.push('health');
+    if (needLaser) pool.push('laser', 'laser', ...(preferHigh ? ['laser'] : []));
+    else if (preferHigh) pool.push('laser');
+    if (lowBombs) pool.push('bomb', 'bomb');
+    else pool.push('bomb');
+    return pick(pool);
+  }
+
+  /** Comprehensive loot drops across all 36+ enemy classes — keeps late-wave HP/damage scaling rewarding! */
   _dropLoot(e) {
     const p = e.mesh.position;
-    if (e.type === 'gunship') {
-      // elite cruiser always yields something good
-      this.pickups.spawn(pick(['health', 'bomb', 'laser']), p.x, p.y, p.z);
-      if (Math.random() < 0.5) this.pickups.spawn('ring', p.x + 6, p.y, p.z);
-    } else if (e.type === 'sniper' || e.type === 'seeker') {
+    const t = e.type;
+    // Capital warships & heavy armor: guaranteed smart tactical drop + bonus gold ring
+    if (
+      t === 'dreadwing' || t === 'siegecarrier' || t === 'frigate' || t === 'skyraider'
+      || t === 'carrier' || t === 'gunboat' || t === 'mech' || t === 'aabattery'
+      || t === 'quadtank' || t === 'trilobite' || t === 'gunship' || t === 'bomber'
+    ) {
+      this.pickups.spawn(this._pickSmartLoot(true), p.x, p.y, p.z);
+      if (Math.random() < 0.65) this.pickups.spawn('ring', p.x + 6, p.y, p.z);
+      return;
+    }
+    // Water/ground & aerial ambush elites (Kraken, Silo, Wyrm, Scorpion, Breacher, Valkyrie, Vanguard): high tactical reward!
+    if (
+      t === 'kraken' || t === 'silo' || t === 'wyrm' || t === 'scorpion'
+      || t === 'breacher' || t === 'valkyrie' || t === 'vanguard'
+    ) {
+      if (Math.random() < 0.72) this.pickups.spawn(this._pickSmartLoot(false), p.x, p.y, p.z);
+      else this.pickups.spawn('ring', p.x, p.y, p.z);
+      if (Math.random() < 0.45) this.pickups.spawn('ring', p.x - 6, p.y + 1, p.z);
+      return;
+    }
+    // Mid-tier elites & pods
+    if (
+      t === 'pod' || t === 'phantom' || t === 'harrier' || t === 'skytalon'
+      || t === 'fighter' || t === 'strafer' || t === 'sniper' || t === 'seeker'
+      || t === 'saucer' || t === 'relaydrone' || t === 'scout'
+    ) {
       const r = Math.random();
-      if (r < 0.4) this.pickups.spawn(pick(['health', 'bomb']), p.x, p.y, p.z);
-      else if (r < 0.7) this.pickups.spawn('ring', p.x, p.y, p.z);
-    } else if (e.type === 'pod') {
-      const r = Math.random();
-      if (r < 0.4) this.pickups.spawn('health', p.x, p.y, p.z);
-      else if (r < 0.65) this.pickups.spawn('bomb', p.x, p.y, p.z);
-      else if (r < 0.85) this.pickups.spawn('laser', p.x, p.y, p.z);
-    } else if (e.type === 'turret' && Math.random() < 0.25) {
-      this.pickups.spawn(Math.random() < 0.5 ? 'health' : 'bomb', p.x, p.y, p.z);
-    } else if (Math.random() < 0.08) {
+      if (r < (t === 'pod' ? 0.80 : 0.46)) this.pickups.spawn(this._pickSmartLoot(t === 'pod'), p.x, p.y, p.z);
+      else if (r < 0.78) this.pickups.spawn('ring', p.x, p.y, p.z);
+      return;
+    }
+    // Ground batteries & emplacements
+    if (t === 'turret' || t === 'flak' || t === 'hovertank' || t === 'launcher' || t === 'cannon' || t === 'shorecannon') {
+      if (Math.random() < 0.38) this.pickups.spawn(this._pickSmartLoot(false), p.x, p.y, p.z);
+      return;
+    }
+    if (Math.random() < 0.10) {
       this.pickups.spawn('ring', p.x, p.y, p.z);
     }
   }
@@ -506,6 +581,8 @@ export class Game {
     $('ending-screen').classList.add('hidden');
     $('leaderboard-screen').classList.add('hidden');
     $('rank-entry-screen').classList.add('hidden');
+    $('upgrade-screen')?.classList.add('hidden');
+    $('upgrade-screen')?.setAttribute('aria-hidden', 'true');
     this.hud.show();
     this.input.setTouchEnabled(true);
     this.paused = false;
@@ -739,7 +816,7 @@ export class Game {
     this.paused = false;
     $('pause-screen').classList.add('hidden');
     $('pause-screen').setAttribute('aria-hidden', 'true');
-    this.hp = 100;
+    this.hp = this.maxHp ?? 100;
     this.player.meter = 100;
     this.player.invuln = 1.5;
     this.player.x = 0; this.player.y = 12;
@@ -753,6 +830,8 @@ export class Game {
     $('wave-results')?.classList.add('hidden');
     $('pause-screen').classList.add('hidden');
     $('pause-screen').setAttribute('aria-hidden', 'true');
+    $('upgrade-screen')?.classList.add('hidden');
+    $('upgrade-screen')?.setAttribute('aria-hidden', 'true');
     if (this.boss) { this.boss.destroy(); this.boss = null; }
     this.enemies.clear();
     this.pickups.clear();
@@ -772,6 +851,12 @@ export class Game {
       if (this.state === 'branch') {
         if (e.code === 'Digit1' || e.code === 'ArrowLeft') this._chooseBranch('pursue');
         else if (e.code === 'Digit2' || e.code === 'ArrowRight') this._chooseBranch('guard');
+        return;
+      }
+      if (this.state === 'upgrade') {
+        if (e.code === 'Digit1' || e.code === 'ArrowLeft') this._chooseUpgrade(0);
+        else if (e.code === 'Digit2' || e.code === 'ArrowDown') this._chooseUpgrade(1);
+        else if (e.code === 'Digit3' || e.code === 'ArrowRight') this._chooseUpgrade(2);
         return;
       }
       if (this.state === 'mode') {
@@ -951,19 +1036,29 @@ export class Game {
     const pos = e.mesh.position;
     const closeKill = fromPlayer && pos.z > -115;
     const baseScore = fromPlayer ? e.score : Math.round(e.score * 0.6);
-    const mul = opts.scoreMul ?? (closeKill ? 1.5 : 1.0);
+    const mul = (opts.scoreMul ?? (closeKill ? 1.5 : 1.0)) * (fromPlayer ? (this.build?.scoreMul ?? 1) : 1);
     const awarded = Math.round(baseScore * mul);
 
     this.addScore(awarded);
     this.waveStats.kills++;
     this.stats.kills++;
     if (fromPlayer) {
-      this._onKill(pos);
+      this._onKill(pos, e);
       this.hud.hitConfirm(true);
       const tag = opts.tag ?? (closeKill ? 'CLOSE KILL!' : (e.tier === 'heavy' ? 'DESTROYED!' : ''));
       this.hud.killPop(this._toScreen(pos), awarded, tag, opts.style ?? '');
       this._dropLoot(e);
+      const wipe = this.enemies.noteSquadKill(e);
+      if (wipe) {
+        const wipeBonus = Math.round((220 + this.wave * 30) * (this.build?.scoreMul ?? 1));
+        this.addScore(wipeBonus);
+        this.hud.callout(`SQUAD WIPE! +${wipeBonus}`, '✦', '#78ffd2');
+        this.hud.killPop(this._toScreen(pos), wipeBonus, 'SQUAD WIPE!', 'squad-wipe');
+        this.pickups.spawn(this._pickSmartLoot(true), pos.x, pos.y + 1.5, pos.z);
+        audio.pickup();
+      }
     } else {
+      this.enemies.noteSquadKill(e);
       this.wingmates.reportKill();
     }
 
@@ -1013,8 +1108,10 @@ export class Game {
     this.debris.burst(bp.x, bp.y, bp.z, { count: manual ? 11 : 8, scale: manual ? 1.7 : 1.35, speed: 1.5 });
     this.shake = manual ? 2.4 : 1.9;
     this.timeScale = manual ? 0.5 : 0.7;              // brief slow-mo punch
-    // explosion radius ~3x the old bomb (46 -> ~140), manual is larger still
-    this._areaDamage(bp, manual ? 190 : 152, manual ? 18 : 14, true);
+    // explosion radius ~3x the old bomb (46 -> ~140), scaled by Nova Warhead upgrades!
+    const radMul = this.build?.bombRadMul ?? 1;
+    const dmgMul = this.build?.bombDmgMul ?? 1;
+    this._areaDamage(bp, (manual ? 190 : 152) * radMul, (manual ? 18 : 14) * dmgMul, true);
     this.proj.clearEnemyBullets((pos) => this.particles.emit(pos.x, pos.y, pos.z, { count: 3, speed: 8, color: 0xffe0a0, life: 0.3, size: 1.6 }));
   }
 
@@ -1028,13 +1125,33 @@ export class Game {
     this.wingmates.reportKill();
   }
 
-  damagePlayer(dmg, src = '') {
+  /** Wave-escalating enemy & boss ordnance damage (W1 = 1.0x -> W16 = 2.5x, tiered by weapon class). */
+  _enemyDamage(btype = 'orb', radius = 0.9) {
+    const waveMul = 1 + (clamp(this.wave ?? 1, 1, 16) - 1) * 0.10;
+    const bossMul = this.boss?.alive ? 1.15 : 1.0;
+    let base = 7;
+    if (btype === 'superwave' || btype === 'rail') base = 15;
+    else if (btype === 'heavy' || btype === 'flak' || btype === 'cluster' || btype === 'mortar' || btype === 'wave' || radius > 1.5) base = 12;
+    else if (btype === 'homing' || btype === 'missile' || btype === 'swarm' || btype === 'torpedo' || btype === 'pursuit' || btype === 'boomerang') base = 10;
+    return Math.round(base * waveMul * bossMul);
+  }
+
+  damagePlayer(dmg, src = '', meta = null) {
     if (this.player.invuln > 0 || this.player.rolling || this.state !== 'playing') return;
     this.hp -= dmg;
     this.player.triggerDamageShield();
     this.hud.hurt();
-    this.shake = Math.min(this.shake + 0.7, 1.8);
-    audio.playerHit();
+    const heavy = dmg >= 15 || src === 'crash' || src === 'mine' || src === 'ram';
+    this.shake = Math.min(this.shake + (heavy ? 1.05 : 0.72), 2.1);
+    this.camKick = Math.min(this.camKick + (heavy ? 0.55 : 0.28), 1.4);
+    audio.playerHit({
+      dmg,
+      src,
+      btype: meta?.btype ?? 'orb',
+      hpRatio: this.hp / Math.max(1, this.maxHp ?? 100),
+      pan: meta?.pan ?? 0,
+      isStructure: !!meta?.isStructure,
+    });
     this.player.invuln = 0.8;
     this._breakCombo();
     // iconic first-hit coaching from a wingmate
@@ -1062,7 +1179,7 @@ export class Game {
       setTimeout(() => { if (this.state === 'gameover') this._offerRankEntry('failed'); }, 650);
       return;
     }
-    this.hp = 100;
+    this.hp = this.maxHp ?? 100;
     this.player.invuln = 2.6;
     this.player.laserLevel = Math.max(1, this.player.laserLevel - 1);
     this.hud.say('JUNO', 'Bowie! Pull up — shields restored. Go get them!', 2.8);
@@ -1088,23 +1205,32 @@ export class Game {
     if (this.input.chargeHeld) {
       if (!p.charging) {
         p.charging = true; p.charge = 0;
+        this._chargeFullBeeped = false;
         this._chargeLocks.length = 0;
         this._chargeLock = null;
         audio.chargeStart();
       }
-      p.charge = Math.min(1, p.charge + dt / 0.62);
+      const chgMul = (this.build?.chargeSpeedMul ?? 1) * (this.overdriveT > 0 ? 1.25 : 1);
+      p.charge = Math.min(1, p.charge + (dt / 0.62) * chgMul);
+      if (p.charge >= 0.98 && !this._chargeFullBeeped) {
+        this._chargeFullBeeped = true;
+        audio.chargeFull();
+      }
       this._updateChargeLock();
     } else if (p.charging) {
       if (p.charge > 0.30) this._releaseCharge();
       else audio.chargeEnd(false);
       p.charging = false; p.charge = 0;
+      this._chargeFullBeeped = false;
       this._chargeLocks.length = 0;
       this._chargeLock = null;
     }
 
     // hold space / left mouse: rapid fire
     if (this.input.firing && !p.charging && p.fireCd <= 0) {
-      p.fireCd = p.laserLevel >= 3 ? 0.085 : p.laserLevel === 2 ? 0.105 : 0.115;
+      const baseCd = p.laserLevel >= 4 ? 0.080 : p.laserLevel === 3 ? 0.085 : p.laserLevel === 2 ? 0.105 : 0.115;
+      const rateMul = (this.build?.fireRateMul ?? 1) * (this.overdriveT > 0 ? 1.32 : 1);
+      p.fireCd = Math.max(0.042, baseCd / rateMul);
       this._fireLasers();
     }
 
@@ -1122,7 +1248,11 @@ export class Game {
     }
     const isBoost = this.input.boosting && p.meter > 2;
     const isBrake = !isBoost && this.input.braking && p.meter > 2;
-    if (isBoost && !this._wasBoosting) audio.boost(true);
+    if (isBoost && !this._wasBoosting) {
+      audio.boost(true);
+      this.particles.boostRing(p.x, p.y, PLAYER_Z + p.zShift + 2.5, 0x8ef4ff, 1.35);
+      this._flashLight(_v1.set(p.x, p.y, PLAYER_Z + p.zShift + 4), 0x72eaff, 48, 85, 10);
+    }
     if (isBrake && !this._wasBraking) audio.boost(false);
     this._wasBoosting = isBoost;
     this._wasBraking = isBrake;
@@ -1149,16 +1279,18 @@ export class Game {
     const best = this._findAimAssistTarget(farScreen);
     if (best) aim.copy(best.pos());
     const lvl = p.laserLevel;
-    const dmg = lvl >= 3 ? 1.75 : lvl === 2 ? 1.25 : 1;
-    const offsets = lvl === 1 ? [0] : lvl === 2 ? [-1.8, 1.8] : [-2.6, 0, 2.6];
+    const baseDmg = lvl >= 4 ? 2.15 : lvl === 3 ? 1.75 : lvl === 2 ? 1.25 : 1;
+    const dmg = baseDmg * (this.build?.laserDmgMul ?? 1) * (this.overdriveT > 0 ? 1.25 : 1);
+    const offsets = lvl >= 4 ? [-3.4, -1.15, 1.15, 3.4] : lvl === 3 ? [-2.6, 0, 2.6] : lvl === 2 ? [-1.8, 1.8] : [0];
+    const style = this.overdriveT > 0 ? 'overdrive' : this.build?.crimsonLasers ? 'crimson' : null;
     for (const s of offsets) {
       const origin = s === 0 ? muzzle : _v3.copy(muzzle).setX(muzzle.x + s);
-      this.proj.fireLaser(origin, aim, dmg, lvl);
-      this.particles.laserMuzzle(origin.x, origin.y + 0.1, origin.z - 1, lvl);
+      this.proj.fireLaser(origin, aim, dmg, lvl, style);
+      this.particles.laserMuzzle(origin.x, origin.y + 0.1, origin.z - 1, Math.min(lvl, 3));
     }
     p.recoilT = 0.08;
     this.waveStats.shots += offsets.length;
-    audio.laser(lvl);
+    audio.laser(Math.min(lvl, 3));
   }
 
   _isLocked(ref) {
@@ -1188,6 +1320,9 @@ export class Game {
         }
       }
     }
+    if (this.rival?.active && this.rival.hp > 0 && this.rival.pos.z < -16) {
+      out.push({ pos: () => this.rival.pos, alive: true, ref: this.rival, isRival: true });
+    }
     return out;
   }
 
@@ -1195,17 +1330,22 @@ export class Game {
     // Prune dead / out-of-range locks first
     for (let i = this._chargeLocks.length - 1; i >= 0; i--) {
       const l = this._chargeLocks[i];
-      const alive = l.isWeak ? (this.boss?.alive && l.ref.alive && l.ref.active) : (l.ref.alive && !l.ref.dying && l.ref.mesh.position.z < -20);
+      const alive = l.isRival
+        ? (this.rival?.active && this.rival.hp > 0 && this.rival.pos.z < -12)
+        : l.isWeak
+          ? (this.boss?.alive && l.ref.alive && l.ref.active)
+          : (l.ref.alive && !l.ref.dying && l.ref.mesh.position.z < -20);
       if (!alive) this._chargeLocks.splice(i, 1);
     }
 
-    // Sweep reticle across enemies to acquire up to 3 simultaneous locks!
+    // Sweep reticle across enemies to acquire up to maxChargeLocks simultaneous locks (3 -> 5 -> 7 -> 8!)
     this.player.aimFar(_v1);
     const farScreen = this._toScreen(_v1);
     if (!farScreen) { this._chargeLock = this._chargeLocks[0] ?? null; return; }
 
-    if (this._chargeLocks.length < 3) {
-      let best = null, bestD = 165;
+    const maxLocks = this.build?.maxChargeLocks ?? 3;
+    if (this._chargeLocks.length < maxLocks) {
+      let best = null, bestD = 170;
       for (const c of this._lockCandidates()) {
         if (this._isLocked(c.ref)) continue;
         const s = this._toScreen(c.pos());
@@ -1215,7 +1355,7 @@ export class Game {
       }
       if (best) {
         this._chargeLocks.push(best);
-        audio.lockBeep(this._chargeLocks.length - 1);
+        audio.lockBeep(Math.min(this._chargeLocks.length - 1, 5));
       }
     }
     this._chargeLock = this._chargeLocks[0] ?? null;
@@ -1225,21 +1365,33 @@ export class Game {
     const p = this.player;
     p.muzzle(_v1);
     const locks = this._chargeLocks;
+    const cOpts = {
+      dmgMul: (this.build?.chargeDmgMul ?? 1) * (this.overdriveT > 0 ? 1.25 : 1),
+      radMul: this.build?.chargeRadMul ?? 1,
+      crimson: !!this.build?.crimsonLasers,
+      overdrive: this.overdriveT > 0,
+    };
     if (locks.length > 0) {
       const n = locks.length;
       for (let i = 0; i < n; i++) {
         const lock = locks[i];
         const target = {
-          get alive() { return lock.isWeak ? (lock.ref.alive && lock.ref.active) : (lock.ref.alive && !lock.ref.dying); },
-          pos: () => lock.ref.worldPos ? lock.ref.worldPos(lock.ref._lockPos || (lock.ref._lockPos = new THREE.Vector3())) : lock.ref.mesh.position,
+          get alive() {
+            if (lock.isRival) return !!(lock.ref.active && lock.ref.hp > 0);
+            return lock.isWeak ? (lock.ref.alive && lock.ref.active) : (lock.ref.alive && !lock.ref.dying);
+          },
+          pos: () => lock.isRival
+            ? lock.ref.pos
+            : (lock.ref.worldPos ? lock.ref.worldPos(lock.ref._lockPos || (lock.ref._lockPos = new THREE.Vector3())) : lock.ref.mesh.position),
         };
-        const fanX = n === 1 ? 0 : (i - (n - 1) * 0.5) * 72;
-        const fanY = n === 3 && i === 1 ? 34 : 0;
-        this.proj.fireCharge(_v1, target, fanX, fanY);
+        const fanStep = n <= 3 ? 72 : Math.max(36, 160 / Math.max(1, n - 1));
+        const fanX = n === 1 ? 0 : (i - (n - 1) * 0.5) * fanStep;
+        const fanY = n >= 3 ? Math.sin((i / (n - 1)) * Math.PI) * 34 : 0;
+        this.proj.fireCharge(_v1, target, fanX, fanY, cOpts);
         this.waveStats.shots++;
       }
     } else {
-      this.proj.fireCharge(_v1, null);
+      this.proj.fireCharge(_v1, null, 0, 0, cOpts);
       this.waveStats.shots++;
     }
     audio.chargeEnd(true);
@@ -1289,10 +1441,13 @@ export class Game {
         if (e.dying) continue;
         if (bp.distanceTo(e.mesh.position) < e.radius + 2.6) {
           this.waveStats.hits++;
-          audio.enemyHit(b.level);
-          this.hud.hitConfirm(false);
-          this.particles.laserImpact(bp.x, bp.y, bp.z, b.level, false);
-          if (this.enemies.hit(e, b.dmg)) {
+          const heavyBonus = (e.tier === 'heavy' || e.maxHp >= 14) ? (this.build?.heavyDmgMul ?? 1) : 1;
+          const dealt = b.dmg * heavyBonus;
+          const critical = (e.hp - dealt) <= Math.max(1, e.maxHp * 0.35);
+          audio.enemyHit(Math.min(b.level, 3), critical);
+          this.hud.hitConfirm(critical);
+          this.particles.laserImpact(bp.x, bp.y, bp.z, Math.min(b.level, 3), critical);
+          if (this.enemies.hit(e, dealt)) {
             this._handleEnemyKill(e, true, false);
           }
           consumed = true;
@@ -1305,25 +1460,27 @@ export class Game {
           this.waveStats.hits++;
           this.hud.hitConfirm(hit.kind === 'weak');
           audio.bossHit(hit.kind === 'weak');
-          this.particles.laserImpact(bp.x, bp.y, bp.z, b.level, hit.kind === 'weak');
+          this.particles.laserImpact(bp.x, bp.y, bp.z, Math.min(b.level, 3), hit.kind === 'weak');
           this.particles.impact(bp.x, bp.y, bp.z, hit.kind === 'weak' ? 'heavy' : 'orb', hit.kind === 'weak' ? 1.15 : 0.78);
           this.boss.addScorch(bp);
           if (hit.kind === 'weak') {
-            const died = hit.wp.hit(b.dmg * 2);
-            this.boss.damage(b.dmg * 2);
+            const wDmg = b.dmg * 2 * (this.build?.bossWeakMul ?? 1);
+            const died = hit.wp.hit(wDmg);
+            this.boss.damage(wDmg);
             if (died) { this.explodeAt(bp, true, { scaleMul: 1.3 }); this.addScore(200); this.timeScale = Math.min(this.timeScale, 0.65); }
           } else {
-            this.boss.damage(b.dmg * 0.25);
+            const effArmor = Math.min(0.68, (this.boss.armorMult ?? 0.25) + (this.build?.bossArmorBonus ?? 0));
+            this.boss.damage(b.dmg * effArmor);
           }
           consumed = true;
         }
       }
-      // Point-defense missile interception: lasers can shoot down incoming enemy homing missiles!
+      // Point-defense interception: lasers can shoot down ALL incoming missiles, pursuit orbs & airburst cluster shells!
       if (!consumed) {
         for (const eb of this.proj.ebullets) {
-          if (!eb.active || eb.deflected || (eb.btype !== 'missile' && eb.btype !== 'homing')) continue;
-          if (bp.distanceTo(eb.mesh.position) < 4.4) {
-            eb.active = false; eb.mesh.visible = false; eb.targetWingmate = null;
+          if (!eb.active || eb.deflected || (!eb.homing && !eb.shootable)) continue;
+          if (bp.distanceTo(eb.mesh.position) < 4.6) {
+            eb.active = false; eb.mesh.visible = false; eb.targetWingmate = null; eb.splitT = 0;
             this.waveStats.hits++;
             this.addScore(15);
             this.hud.hitConfirm(false);
@@ -1362,7 +1519,7 @@ export class Game {
         const hit = this.boss.hitTest(bp, 1.4);
         if (hit) {
           if (hit.kind === 'weak') { hit.wp.hit(b.dmg); this.boss.damage(b.dmg); }
-          else this.boss.damage(b.dmg * 0.15);
+          else this.boss.damage(b.dmg * Math.min(0.15, (this.boss.armorMult ?? 0.25) * 0.6));
           consumed = true;
         }
       }
@@ -1394,7 +1551,7 @@ export class Game {
         c.active = false; c.mesh.visible = false;
         if (this.boss?.alive && this.boss.hitTest(cp, 8)) this.boss.addScorch(cp);
         this.explodeAt(cp, true);
-        this._areaDamage(cp, 24, 4, true);
+        this._areaDamage(cp, 24 * (c.radMul ?? 1), 4.5 * (c.dmgMul ?? 1), true);
       }
     }
 
@@ -1423,13 +1580,14 @@ export class Game {
         // Reflected shots can counter-kill enemies & damage bosses!
         const bp = b.mesh.position;
         let hitCounter = false;
+        const refMul = this.build?.reflectDmgMul ?? 1;
         for (const e of this.enemies.list) {
           if (e.dying) continue;
           if (bp.distanceTo(e.mesh.position) < e.radius + 3.4) {
             this.particles.laserImpact(bp.x, bp.y, bp.z, 3, true);
             this.hud.hitConfirm(true);
             audio.enemyHit(3);
-            if (this.enemies.hit(e, 5.5)) {
+            if (this.enemies.hit(e, 5.5 * refMul)) {
               this._handleEnemyKill(e, true, false, { scoreMul: 2.0, tag: 'COUNTER KILL!', style: 'counter-kill' });
               this._flashLight(e.mesh.position, 0x72fff0, 82, 220, 9);
             }
@@ -1444,11 +1602,11 @@ export class Game {
             audio.bossHit(true);
             this.particles.laserImpact(bp.x, bp.y, bp.z, 3, true);
             if (hit.kind === 'weak') {
-              const died = hit.wp.hit(6);
-              this.boss.damage(6);
+              const died = hit.wp.hit(6 * refMul);
+              this.boss.damage(6 * refMul);
               if (died) { this.explodeAt(bp, true, { scaleMul: 1.3 }); this.addScore(250); }
             } else {
-              this.boss.damage(2.5);
+              this.boss.damage(2.5 * refMul);
             }
             this.hud.killPop(this._toScreen(bp), 50, 'COUNTER!', 'counter-kill');
             this.addScore(50);
@@ -1460,7 +1618,7 @@ export class Game {
       }
 
       const d = b.mesh.position.distanceTo(playerPos);
-      if (P.rolling && d < 9.5) {
+      if (P.rolling && d < 9.5 * (this.build?.reflectRadMul ?? 1)) {
         b.deflected = true;
         b.targetWingmate = null;
         // Aim reflected shot back toward the nearest enemy ahead for true Star Fox counters!
@@ -1488,19 +1646,18 @@ export class Game {
         this.addScore(5);
         P.triggerDeflect();
         audio.deflect();
-        this._flashLight(playerPos, 0x76fff0, 38, 95, 14);
-        this.particles.ring(bp.x, bp.y, bp.z, { color: 0x8effea, radius: 5.5, dur: 0.26, opacity: 0.65 });
-        this.particles.emit(bp.x, bp.y, bp.z, { count: 6, speed: 15, color: 0xbfffe8, life: 0.28, size: 1.8 });
+        this._flashLight(playerPos, 0x76fff0, 44, 110, 14);
+        this.particles.deflectBurst(bp.x, bp.y, bp.z);
         if (this._deflectPopCd <= 0) {
           this._deflectPopCd = 0.45;
           this.hud.killPop(this._toScreen(playerPos), 5, 'DEFLECT!', 'counter-kill');
         }
       } else if (d < (b.radius ?? 0.9) + P.radius) {
-        b.active = false; b.mesh.visible = false;
+        b.active = false; b.mesh.visible = false; b.splitT = 0;
         const bp = b.mesh.position;
         this.particles.impact(bp.x, bp.y, bp.z, b.btype, b.radius > 1.5 ? 1.3 : 1);
-        audio.impact(b.btype);
-        this.damagePlayer(b.radius > 1.5 ? 12 : 7, 'bullet'); // heavy shells hurt more
+        const pan = clamp((bp.x - P.x) / 9, -0.82, 0.82);
+        this.damagePlayer(this._enemyDamage(b.btype, b.radius), 'bullet', { btype: b.btype, pan });
       }
     }
 
@@ -1525,10 +1682,14 @@ export class Game {
     /* enemy bodies vs player */
     for (const e of [...this.enemies.list]) {
       if (e.type === 'mine' || e.dying) continue;
+      // Fair grace during rear-overtake flyby: enemies streaking past Bowie's canopy wings never unfairly ram from behind!
+      if ((e.entryMode === 'rear' || e.entryMode === 'rearPincer') && e.mesh.position.z > PLAYER_Z - 10) continue;
       if (e.mesh.position.distanceTo(playerPos) < e.radius + 1.8) {
+        const pan = clamp((e.mesh.position.x - P.x) / 10, -0.82, 0.82);
         this.explodeAt(e.mesh.position, e.tier === 'heavy');
         this.enemies.kill(e, false);
-        this.damagePlayer(12, 'ram');
+        const ramDmg = Math.round(12 * (1 + (clamp(this.wave ?? 1, 1, 16) - 1) * 0.10));
+        this.damagePlayer(ramDmg, 'ram', { pan });
       }
     }
 
@@ -1595,36 +1756,48 @@ export class Game {
       if (struck.isStructure) this.particles.structureHit(P.x, P.y, PLAYER_Z, 1.35);
       else this.particles.terrainChip(P.x, P.y, PLAYER_Z, this.zone?.id, 1.25);
       if (P.invuln <= 0) {
+        const crashPan = clamp((struck.cx - P.x) / 14, -0.82, 0.82);
         if (P.rolling) {
           // Glancing shield-scrape while rolling: physical bounce + welding sparks + light shield hit
           P.triggerDeflect();
           this.shake = Math.min(this.shake + 0.45, 1.4);
-          audio.deflect();
+          audio.shieldScrape(crashPan);
           this.hp = Math.max(1, this.hp - Math.round(struck.dmg * 0.35));
           P.invuln = 0.45;
         } else {
-          this.damagePlayer(struck.dmg, 'crash');
+          this.damagePlayer(struck.dmg, 'crash', { pan: crashPan, isStructure: struck.isStructure });
           this.explodeAt(_v1.set(P.x, P.y, PLAYER_Z), false);
         }
       }
     }
   }
 
-  /* ================= all-range rival duel ================= */
-  startRivalDuel(afterWave) {
+  /* ================= all-range rival duel (2-tier escalating) ================= */
+  startRivalDuel(afterWave, tier = 1) {
     this.input.setTouchEnabled(true);
-    this._rivalReturnWave = afterWave;   // wave to load once the duel ends
+    this._rivalReturnWave = afterWave;   // wave to load once the duel & upgrade end
     this.enemies.clear();
     this.pickups.clear();
     this.proj.clearEnemyBullets();
     this.state = 'playing';
-    this.hud.banner('RIVAL DUEL', 'ALL-RANGE MODE');
+    this.hud.banner(tier >= 2 ? 'THORNE MK-II REMATCH' : 'RIVAL DUEL', tier >= 2 ? 'CRIMSON PHANTOM // TIER II' : 'ALL-RANGE MODE // TIER I');
     this.rival._done = false;
-    this.rival.start();
+    this.rival.start(tier);
   }
-  _rivalDefeated() {
-    this.hud.callout('RIVAL DOWN!', '★', '#ffd36b');
-    setTimeout(() => this.loadWave(this._rivalReturnWave), 1400);
+  _rivalDefeated(tier = 1) {
+    this.enemies.clear();
+    this.proj.clearEnemyBullets();
+    if (tier >= 2) {
+      this.hp = this.maxHp;
+      this.player.bombs = Math.min(this.build.maxBombs, this.player.bombs + 1);
+      this.hud.callout('THORNE MK-II DOWN! +6000', '★', '#ff6a8c');
+    } else {
+      this.hud.callout('RIVAL DOWN! +2500', '★', '#ffd36b');
+    }
+    setTimeout(() => {
+      if (this.state !== 'playing') return;
+      this._openUpgradeSelect(this._rivalReturnWave, { includeTrophy: true, source: 'rival', tier });
+    }, 1250);
   }
 
   _areaDamage(center, radius, dmg, fromPlayer) {
@@ -1637,16 +1810,23 @@ export class Game {
       }
     }
     if (this.boss?.alive) {
+      const wMul = fromPlayer ? (this.build?.bossWeakMul ?? 1) : 1;
       for (const w of this.boss.weakpoints) {
         if (!w.alive || !w.active) continue;
         w.worldPos(_v1);
         if (center.distanceTo(_v1) < radius + w.radius) {
-          const died = w.hit(dmg);
-          this.boss.damage(dmg);
+          const died = w.hit(dmg * wMul);
+          this.boss.damage(dmg * wMul);
           if (died) { this.explodeAt(_v1, true); this.addScore(200); }
         }
       }
-      if (center.distanceTo(this.boss.pos()) < radius + this.boss.bodyRadius) this.boss.damage(dmg * 0.4);
+      if (center.distanceTo(this.boss.pos()) < radius + this.boss.bodyRadius) {
+        const effArmor = fromPlayer ? Math.min(0.75, 0.4 + (this.build?.bossArmorBonus ?? 0)) : 0.4;
+        this.boss.damage(dmg * effArmor);
+      }
+    }
+    if (fromPlayer && this.rival?.active && this.rival.hp > 0 && center.distanceTo(this.rival.pos) < radius + 7.5) {
+      this.rival.takeBombDamage(Math.round(dmg * 1.35), this);
     }
   }
 
@@ -1730,6 +1910,7 @@ export class Game {
     this.enemies.clear();
     this.pickups.clear();
     const branchHere = (this.wave === 2 || this.wave === 8);   // route choice points
+    const upgradeHere = !branchHere && !!this.waveSpec?.boss && this.wave < FINAL_WAVE; // 3-choice upgrade after every boss!
     this._waveClearElapsed = 0;
     this._waveClearFinish = () => {
       if (this.state !== 'waveclear') return;
@@ -1738,6 +1919,7 @@ export class Game {
       this._waveClearFinish = null;
       $('wave-results').classList.add('hidden');
       if (branchHere) this._showBranch();
+      else if (upgradeHere) this._openUpgradeSelect(this.wave + 1, { includeTrophy: false, source: 'boss' });
       else this.loadWave(this.wave + 1);
     };
     this._waveClearTimer = setTimeout(() => this._waveClearFinish?.(), 3400);
@@ -1749,26 +1931,136 @@ export class Game {
     }
   }
 
+  /* ================= 3-choice armory upgrade selection ================= */
+  _openUpgradeSelect(nextWave, opts = {}) {
+    this.state = 'upgrade';
+    this.input.setTouchEnabled(false);
+    this._upgradeNextWave = nextWave;
+    const isRival = opts.source === 'rival';
+    const tier = opts.tier ?? 1;
+    this._upgradeChoices = rollUpgradeChoices(this.upgradeRanks, { includeTrophy: !!opts.includeTrophy });
+
+    if ($('upgrade-kicker')) {
+      $('upgrade-kicker').textContent = isRival
+        ? (tier >= 2 ? 'THORNE MK-II SALVAGE // CRIMSON CORE RECOVERED' : 'RIVAL VICTORY // ACE MODULE SALVAGED')
+        : `BOSS DEFEATED // WAVE ${this.wave} ARMORY RETROFIT`;
+    }
+    if ($('upgrade-title')) {
+      $('upgrade-title').textContent = isRival ? 'CLAIM ACE UPGRADE' : 'SELECT AIRFRAME MODULE';
+    }
+    if ($('upgrade-sub')) {
+      $('upgrade-sub').textContent = isRival
+        ? 'Install 1 permanent upgrade — includes Thorne\'s exclusive Crimson Overdrive!'
+        : 'Choose 1 permanent upgrade to power up your Arwing for the waves ahead';
+    }
+
+    const wrap = $('upgrade-cards');
+    if (wrap) {
+      wrap.replaceChildren();
+      this._upgradeChoices.forEach((u, i) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'upgrade-card' + (u.exclusive ? ' cat-trophy' : '');
+        card.style.setProperty('--card-accent', u.color);
+        card.dataset.idx = String(i);
+        const rankLabel = u.repeatable
+          ? 'INSTANT SUPPLY'
+          : u.curRank === 0
+            ? `NEW MODULE · <b>LV 1</b> / ${u.maxRank}`
+            : `UPGRADE · LV ${u.curRank} → <b>LV ${u.nextRank}</b> / ${u.maxRank}`;
+        card.innerHTML =
+          `<div class="upgrade-card-top"><span class="upgrade-key">${i + 1}</span><span class="upgrade-cat">${u.category}</span></div>` +
+          `<div class="upgrade-head"><div class="upgrade-icon">${u.icon}</div><div><div class="upgrade-name">${u.name}</div><div class="upgrade-rank">${rankLabel}</div></div></div>` +
+          `<div class="upgrade-desc">${u.descriptionHtml}</div>`;
+        card.addEventListener('click', () => this._chooseUpgrade(i));
+        wrap.appendChild(card);
+      });
+    }
+    $('upgrade-screen')?.classList.remove('hidden');
+    $('upgrade-screen')?.setAttribute('aria-hidden', 'false');
+    audio.ui();
+  }
+
+  _chooseUpgrade(idx) {
+    if (this.state !== 'upgrade') return;
+    const u = this._upgradeChoices[idx];
+    if (!u) return;
+    const P = this.player;
+    const prevMaxHp = this.maxHp;
+
+    if (u.repeatable) {
+      if (u.id === 'supply_0') {
+        P.bombs = Math.min(this.build.maxBombs, P.bombs + 2);
+        this.hp = this.maxHp;
+      } else if (u.id === 'supply_1') {
+        this.ringMaxHpBonus = Math.min(80, this.ringMaxHpBonus + 15);
+        this._recomputeBuild();
+        this.hp = this.maxHp;
+      } else {
+        this.addScore(1500);
+        P.bombs = Math.min(this.build.maxBombs, P.bombs + 1);
+      }
+    } else {
+      this.upgradeRanks[u.id] = (this.upgradeRanks[u.id] | 0) + 1;
+      this._recomputeBuild();
+      if (u.id === 'overcharge' && this.upgradeRanks.overcharge === 1) {
+        P.laserLevel = Math.min(this.build.maxLaserLevel, P.laserLevel + 1);
+      } else if (u.id === 'novabomb') {
+        P.bombs = Math.min(this.build.maxBombs, P.bombs + 2);
+      } else if (u.id === 'aegis') {
+        this.hp = this.maxHp;
+      } else if (u.id === 'thorne_trophy') {
+        this.hp = Math.min(this.maxHp, this.hp + 35);
+      } else if (this.maxHp > prevMaxHp) {
+        this.hp = Math.min(this.maxHp, this.hp + (this.maxHp - prevMaxHp));
+      }
+    }
+
+    $('upgrade-screen')?.classList.add('hidden');
+    $('upgrade-screen')?.setAttribute('aria-hidden', 'true');
+    audio.pickup();
+    this.hud.callout(`${u.name} INSTALLED!`, u.icon, u.color);
+    const targetWave = this._upgradeNextWave ?? (this.wave + 1);
+    this._upgradeNextWave = null;
+    this._upgradeChoices = [];
+    this.loadWave(targetWave);
+  }
+
   /* ================= branching route choice ================= */
   _showBranch() {
     this.state = 'branch';
     this.input.setTouchEnabled(false);
+    const tier = this.wave >= 8 ? 2 : 1;
+    if ($('branch-pursue-name')) {
+      $('branch-pursue-name').textContent = tier >= 2 ? 'PURSUE THORNE MK-II' : 'PURSUE THORNE';
+    }
+    if ($('branch-pursue-desc')) {
+      $('branch-pursue-desc').innerHTML = tier >= 2
+        ? 'Rematch against <b>Thorne MK-II (Tier II)</b> — laser-deflecting rolls, railgun &amp; Crimson Wingmen! Reward: <b>+6000, +1 Bomb, Full Shield &amp; Ace Upgrade</b>.'
+        : 'Break off into an <b>All-Range</b> ace duel with Thorne (Tier I). Reward: <b>+2500 &amp; Ace Armory Upgrade</b>.';
+    }
+    if ($('branch-guard-desc')) {
+      $('branch-guard-desc').innerHTML = 'Hold the line. <b>Full shields, +1000, and +1 Smart Bomb</b> from a grateful squadron.';
+    }
     $('branch-screen').classList.remove('hidden');
     audio.alarm();
-    this.hud.say('REX', 'Bowie, Thorne broke off from the fleet. Your call — pursue, or hold the line?', 4);
+    this.hud.say('REX', tier >= 2
+      ? 'Bowie! Thorne is back in a heavily upgraded MK-II Crimson Phantom — engage him, or guard the fleet?'
+      : 'Bowie, Thorne broke off from the fleet. Your call — pursue, or hold the line?', 4);
   }
   _chooseBranch(opt) {
     if (this.state !== 'branch') return;
     $('branch-screen').classList.add('hidden');
     audio.ui();
     const next = this.wave + 1;
+    const tier = this.wave >= 8 ? 2 : 1;
     if (opt === 'pursue') {
-      this.startRivalDuel(next);
+      this.startRivalDuel(next, tier);
     } else {
       // guard route: defensive reward + a saved squadron
-      this.hp = 100;
+      this.hp = this.maxHp ?? 100;
       this.addScore(1000);
-      this.player.bombs = Math.min(5, this.player.bombs + 1);
+      this.player.bombs = Math.min(this.build?.maxBombs ?? 5, this.player.bombs + 1);
       this.hud.callout('FLEET GUARDED +1000', '✚', '#8bffb0');
       this.hud.say('KIT', 'Thanks for holding the line, Bowie! We owe you.', 2.8);
       this.loadWave(next);
@@ -1873,9 +2165,19 @@ export class Game {
     this.scene.fog.near = damp(this.scene.fog.near, this._fogTarget.near, 0.8, rawDt);
     this.scene.fog.far = damp(this.scene.fog.far, this._fogTarget.far, 0.8, rawDt);
 
-    if (this.paused) { this.input.endFrame(); return; }
+    if (this.paused) {
+      audio.updateEngine(1, 0, false, false);
+      this.input.endFrame();
+      return;
+    }
 
     const playing = this.state === 'playing' || this.state === 'waveclear' || this.state === 'finale';
+    audio.updateEngine(
+      this.player.speedFactor,
+      clamp(Math.abs(this.player.vx) / 145, 0, 1),
+      this.player.rolling,
+      playing
+    );
     const bossHold = this.boss?.alive;
     const scroll = playing
       ? BASE_SCROLL * this.player.speedFactor * (bossHold ? 0.4 : 1)
@@ -1910,7 +2212,7 @@ export class Game {
       this.enemies.update(dt, scroll, this.player, this.proj, this);
       this._steerLasers(dt);
       this.proj.update(dt, scroll, this.player, this.particles);
-      this.pickups.update(dt, scroll, this.player, (kind, pos) => this._collect(kind, pos));
+      this.pickups.update(dt, scroll, this.player, (kind, pos, chainInfo) => this._collect(kind, pos, chainInfo));
       if (this.state === 'playing' || this.state === 'finale') this.wingmates.update(dt, this.player, this.enemies, this.proj);
       if (this.boss?.alive) {
         this.boss.update({ dt, player: this.player, proj: this.proj, game: this, scroll, time: this.waveTimer });
@@ -1918,6 +2220,7 @@ export class Game {
       }
       if (this.rival.active) this.rival.update(dt, this.player, this.proj, this);
       if (this.state === 'playing') {
+        if (this.overdriveT > 0) this.overdriveT = Math.max(0, this.overdriveT - dt);
         this._collisions(dt);
         if (!this.rival.active) this._updateWaveScript(dt);   // duel pauses the wave script
         if (this.comboTimer > 0) {
@@ -1938,30 +2241,72 @@ export class Game {
     this.input.endFrame();
   }
 
-  _collect(kind, pos) {
+  _collect(kind, pos, chainInfo = null) {
     const P = this.player;
+    const maxHp = this.maxHp ?? 100;
+    const maxLaser = this.build?.maxLaserLevel ?? 3;
+    const maxBombs = this.build?.maxBombs ?? 5;
     if (kind === 'ring') {
-      this.addScore(50);
+      const step = chainInfo?.chainStep ?? 0;
+      const pts = Math.round((50 + (step > 1 ? (step - 1) * 25 : 0)) * (this.build?.scoreMul ?? 1));
+      this.addScore(pts);
       this.waveStats.rings++; this.stats.rings++;
-      this.hp = Math.min(100, this.hp + 3);
+      this.hp = Math.min(maxHp, this.hp + 4);
       audio.ring();
       this.particles.emit(pos.x, pos.y, pos.z, { count: 10, speed: 12, color: 0xffd870, life: 0.4, size: 2.2 });
       this.particles.ring(pos.x, pos.y, pos.z, { color: 0xffd870, radius: 9, dur: 0.4 });
+      if (chainInfo?.chainComplete) {
+        // FULL RING CHAIN REWARD: Permanent +5 Max Shield, +25 Shield, +Laser Level OR 7s Prismatic Overdrive!
+        const chainBonus = Math.round((300 + chainInfo.chainTotal * 80) * (this.build?.scoreMul ?? 1));
+        this.addScore(chainBonus);
+        this.ringMaxHpBonus = Math.min(40, this.ringMaxHpBonus + 5);
+        this._recomputeBuild();
+        this.hp = Math.min(this.maxHp, this.hp + 25);
+        P.meter = 100;
+        let msg = `RING CHAIN! +${chainBonus}`;
+        if (P.laserLevel < this.build.maxLaserLevel) {
+          P.laserLevel++;
+          msg = P.laserLevel >= 4 ? 'RING CHAIN // PLASMA LV.4!' : 'RING CHAIN // LASER UP!';
+        } else {
+          this.overdriveT = Math.max(this.overdriveT, 7.0);
+          msg = 'RING CHAIN // OVERDRIVE 7s!';
+        }
+        audio.pickup();
+        this.hud.callout(msg, '✦', '#ffe678');
+        this.hud.killPop(this._toScreen(pos), chainBonus, 'RING CHAIN!', 'ring-chain');
+        this.particles.emit(pos.x, pos.y, pos.z, { count: 22, speed: 22, color: 0xffe878, color2: 0x72f8ff, life: 0.65, size: 2.8 });
+        this.particles.ring(pos.x, pos.y, pos.z, { color: 0x72f8ff, radius: 18, dur: 0.55 });
+      } else if (step >= 2) {
+        this.hud.killPop(this._toScreen(pos), pts, `RING ×${step}`, 'ring-chain');
+      }
     } else if (kind === 'laser') {
-      P.laserLevel = Math.min(3, P.laserLevel + 1);
+      if (P.laserLevel < maxLaser) {
+        P.laserLevel++;
+        const lbl = P.laserLevel >= 4 ? 'PLASMA LV.4 ONLINE!' : P.laserLevel === 3 ? 'HYPER LASER!' : 'LASER UP!';
+        this.hud.callout(lbl, '◆', P.laserLevel >= 4 ? '#ffe066' : '#ffd36b');
+        this.hud.say('JUNO', P.laserLevel >= 4 ? 'Overcharge Plasma LV.4 active — tear straight through them!' : P.laserLevel >= 3 ? 'Hyper lasers online!' : 'Twin lasers online!', 2.2);
+      } else {
+        this.addScore(Math.round(300 * (this.build?.scoreMul ?? 1)));
+        this.overdriveT = Math.max(this.overdriveT, 3.8);
+        this.hud.callout('MAX LASER // OVERDRIVE!', '⚡', '#ffe466');
+      }
       audio.pickup();
-      this.hud.callout(P.laserLevel >= 3 ? 'HYPER LASER!' : 'LASER UP!', '◆', '#ffd36b');
-      this.hud.say('JUNO', P.laserLevel >= 3 ? 'Hyper lasers online!' : 'Twin lasers online!', 2.2);
       this.particles.emit(pos.x, pos.y, pos.z, { count: 14, speed: 16, color: 0xffd36b, color2: 0xff9020, life: 0.5, size: 2.4 });
     } else if (kind === 'bomb') {
-      P.bombs = Math.min(5, P.bombs + 1);
+      if (P.bombs < maxBombs) {
+        P.bombs++;
+        this.hud.callout('BOMB +1', '❖', '#7fe9ff');
+      } else {
+        this.addScore(Math.round(250 * (this.build?.scoreMul ?? 1)));
+        this.hud.callout('BOMBS FULL +250', '❖', '#7fe9ff');
+      }
       audio.pickup();
-      this.hud.callout('BOMB +1', '❖', '#7fe9ff');
       this.particles.emit(pos.x, pos.y, pos.z, { count: 14, speed: 16, color: 0x7fe9ff, life: 0.5, size: 2.4 });
     } else if (kind === 'health') {
-      this.hp = Math.min(100, this.hp + 35);
+      const heal = Math.max(35, Math.round(maxHp * 0.36));
+      this.hp = Math.min(maxHp, this.hp + heal);
       audio.pickup();
-      this.hud.callout('SHIELD +35', '✚', '#ff8fb0');
+      this.hud.callout(`SHIELD +${heal}`, '✚', '#ff8fb0');
       this.particles.emit(pos.x, pos.y, pos.z, { count: 14, speed: 16, color: 0xff8fb0, life: 0.5, size: 2.4 });
     }
   }
@@ -1992,14 +2337,15 @@ export class Game {
 
   _updateHud(dt) {
     const P = this.player;
-    this.hud.setBars(this.hp, P.meter);
+    this.hud.setBars(this.hp, P.meter, this.maxHp ?? 100);
     this.hud.setFlightState(P.speedFactor);
     this.hud.setScore(this.score);
     this.hud.setLives(Math.max(this.lives, 0));
-    this.hud.setLaserLevel(P.laserLevel);
-    this.hud.setBombs(P.bombs);
+    this.hud.setLaserLevel(P.laserLevel, this.build?.maxLaserLevel ?? 3);
+    this.hud.setBombs(P.bombs, this.build?.maxBombs ?? 5);
+    this.hud.setUpgrades(formatUpgradeBadges(this.upgradeRanks), this.overdriveT);
     this.hud.setBombPrompt(this.proj.bombs.some((b) => b.active));
-    if (this.combo >= 2) this.hud.setComboTimer(this.comboTimer / 2.6);
+    if (this.combo >= 2) this.hud.setComboTimer(this.comboTimer / (this.build?.comboDur ?? 2.6));
 
     const waveProg = this.waveSpec ? clamp(this.waveTimer / Math.max(1, this.waveSpec.length), 0, 1) : 0;
     this.hud.setWaveProgress(

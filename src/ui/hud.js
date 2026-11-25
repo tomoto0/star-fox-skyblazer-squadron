@@ -26,9 +26,9 @@ export class Hud {
   constructor() {
     this.el = {
       hud: $('hud'),
-      hpFill: $('bar-hp-fill'), hpLag: $('bar-hp-lag'), hpVal: $('bar-hp-val'),
+      hpFill: $('bar-hp-fill'), hpLag: $('bar-hp-lag'), hpVal: $('bar-hp-val'), hpBar: $('bar-hp'),
       boostFill: $('bar-boost-fill'),
-      laserPips: $('laser-pips'), bombGems: $('bomb-gems'),
+      laserPips: $('laser-pips'), bombGems: $('bomb-gems'), upgradeBadges: $('upgrade-badges'),
       score: $('score'), lives: $('lives-num'),
       waveStatus: $('wave-status'), waveTag: $('wave-tag'), waveZone: $('wave-zone'),
       waveHostiles: $('wave-hostiles'), waveProgFill: $('wave-progress-fill'),
@@ -54,16 +54,20 @@ export class Hud {
     // laser-power level → laser-bolt icons; bomb count → bomb icons
     const LASER_SVG = '<svg viewBox="0 0 22 12"><rect x="1.5" y="4" width="12.5" height="4" rx="2" fill="#ffe066"/><path d="M13 2 L21 6 L13 10 Z" fill="#ffab1f"/></svg>';
     const BOMB_SVG = '<svg viewBox="0 0 16 16"><circle cx="7.4" cy="10.1" r="4.7" fill="#23252f"/><ellipse cx="5.7" cy="8.4" rx="1.4" ry="1" fill="rgba(255,255,255,.4)"/><path d="M10 6 q2.3-1.8 1.7-4.3" stroke="#9a7a44" stroke-width="1.3" fill="none" stroke-linecap="round"/><circle cx="11.9" cy="1.7" r="1.8" fill="#ffb020"/><circle cx="11.9" cy="1.7" r=".8" fill="#fff2b0"/></svg>';
-    for (let i = 0; i < 3; i++) {
-      const p = document.createElement('div'); p.className = 'pip'; p.innerHTML = LASER_SVG;
+    for (let i = 0; i < 4; i++) {
+      const p = document.createElement('div');
+      p.className = i === 3 ? 'pip lv4' : 'pip';
+      p.innerHTML = LASER_SVG;
+      if (i === 3) p.style.display = 'none';
       this.el.laserPips.appendChild(p); this._pips.push(p);
     }
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 7; i++) {
       const g = document.createElement('div'); g.className = 'gem'; g.innerHTML = BOMB_SVG;
+      if (i >= 5) g.style.display = 'none';
       this.el.bombGems.appendChild(g); this._gems.push(g);
     }
     this._lockPool = [];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 8; i++) {
       const m = document.createElement('div'); m.className = 'lock-marker';
       m.style.display = 'none';
       this.el.lockLayer.appendChild(m);
@@ -88,25 +92,29 @@ export class Hud {
     this._bannerT = 0; this._alertT = 0; this._score = -1;
     this._lastHpText = '';
     this._lastWaveKey = '';
+    this._lastUpgKey = '';
   }
 
   show() { this.el.hud.classList.remove('hidden'); }
   hide() { this.el.hud.classList.add('hidden'); }
 
-  setBars(hp, boost) {
-    const k = clamp(hp / 100, 0, 1);
+  setBars(hp, boost, maxHp = 100) {
+    const cap = Math.max(1, maxHp);
+    const k = clamp(hp / cap, 0, 1);
     this.el.hpFill.style.transform = `scaleX(${k})`;
     if (this.el.hpLag) this.el.hpLag.style.transform = `scaleX(${k})`;
-    this.el.hpFill.classList.toggle('low', hp < 30);
+    this.el.hpFill.classList.toggle('low', k < 0.30);
+    this.el.hpBar?.classList.toggle('overcap', cap > 100);
     if (this.el.hpVal) {
-      const txt = String(Math.max(0, Math.ceil(hp)));
+      const cur = Math.max(0, Math.ceil(hp));
+      const txt = cap > 100 ? `${cur}/${cap}` : String(cur);
       if (txt !== this._lastHpText) {
         this._lastHpText = txt;
         this.el.hpVal.textContent = txt;
       }
     }
     this.el.boostFill.style.transform = `scaleX(${clamp(boost / 100, 0, 1)})`;
-    this.el.hud.classList.toggle('is-low-hp', hp > 0 && hp < 30);
+    this.el.hud.classList.toggle('is-low-hp', hp > 0 && k < 0.30);
   }
 
   setFlightState(speedFactor) {
@@ -175,8 +183,45 @@ export class Hud {
     this.el.score.textContent = String(Math.min(v, 999999)).padStart(4, '0');
   }
   setLives(v) { this.el.lives.textContent = 'x ' + v; }
-  setLaserLevel(lv) { this._pips.forEach((p, i) => p.classList.toggle('on', i < lv)); }
-  setBombs(n) { this._gems.forEach((g, i) => g.classList.toggle('on', i < n)); }
+  setLaserLevel(lv, maxLv = 3) {
+    const cap = Math.max(3, maxLv, lv);
+    this._pips.forEach((p, i) => {
+      p.style.display = i < cap ? '' : 'none';
+      p.classList.toggle('on', i < lv);
+    });
+  }
+  setBombs(n, maxBombs = 5) {
+    const cap = Math.max(5, maxBombs, n);
+    this._gems.forEach((g, i) => {
+      g.style.display = i < cap ? '' : 'none';
+      g.classList.toggle('on', i < n);
+    });
+  }
+  setUpgrades(badges = [], overdriveT = 0) {
+    const el = this.el.upgradeBadges;
+    if (!el) return;
+    const ovSec = overdriveT > 0 ? Math.ceil(overdriveT) : 0;
+    const key = `${ovSec}|` + badges.map((b) => `${b.id}:${b.label}`).join(',');
+    if (key === this._lastUpgKey) return;
+    this._lastUpgKey = key;
+    const show = badges.length > 0 || ovSec > 0;
+    el.classList.toggle('hidden', !show);
+    if (!show) { el.replaceChildren(); return; }
+    el.replaceChildren();
+    if (ovSec > 0) {
+      const ov = document.createElement('span');
+      ov.className = 'upg-badge overdrive';
+      ov.textContent = `✦ OVERDRIVE ${ovSec}s`;
+      el.appendChild(ov);
+    }
+    for (const b of badges) {
+      const chip = document.createElement('span');
+      chip.className = 'upg-badge' + (b.trophy ? ' trophy' : '');
+      chip.style.setProperty('--upg-col', b.color);
+      chip.textContent = `${b.icon} ${b.label}`;
+      el.appendChild(chip);
+    }
+  }
 
   /* ---- boss ---- */
   showBoss(name, phases = 1) {

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STAR FOX — SKYBLAZER SQUADRON</title>
 <!-- SOCIAL_META: server.mjs injects absolute OGP and X Card tags for every HTML response. -->
-<link rel="stylesheet" href="./css/style.css?v=artisan-v59">
+<link rel="stylesheet" href="./css/style.css?v=artisan-v76">
 <script type="importmap">
 {
   "imports": {
@@ -39,6 +39,7 @@
           <div id="laser-pips"></div>
           <div id="bomb-gems"></div>
         </div>
+        <div id="upgrade-badges" class="hidden"></div>
       </div>
     </div>
 
@@ -373,21 +374,30 @@
 
   <!-- branching route choice -->
   <div id="branch-screen" class="hidden">
-    <div class="branch-title">CHOOSE YOUR ROUTE</div>
+    <div class="branch-title" id="branch-title">CHOOSE YOUR ROUTE</div>
     <div class="branch-cards">
       <div class="branch-card" data-opt="pursue">
         <div class="bc-key">1 / ←</div>
-        <div class="bc-name">PURSUE THORNE</div>
-        <div class="bc-desc">Break off into an <b>All-Range</b> duel with your rival. High risk, big reward.</div>
+        <div class="bc-name" id="branch-pursue-name">PURSUE THORNE</div>
+        <div class="bc-desc" id="branch-pursue-desc">Break off into an <b>All-Range</b> duel with your rival. High risk, big reward + <b>Armory Upgrade</b>.</div>
       </div>
       <div class="branch-card" data-opt="guard">
         <div class="bc-key">2 / →</div>
         <div class="bc-name">GUARD THE FLEET</div>
-        <div class="bc-desc">Hold the line. Full shields, +1000, and an extra bomb from a grateful squadron.</div>
+        <div class="bc-desc" id="branch-guard-desc">Hold the line. Full shields, +1000, and an extra bomb from a grateful squadron.</div>
       </div>
     </div>
   </div>
+
+  <!-- 3-choice armory upgrade selection -->
+  <div id="upgrade-screen" class="hidden" aria-hidden="true">
+    <div class="upgrade-kicker" id="upgrade-kicker">SKYBLAZER ARMORY // TACTICAL RETROFIT</div>
+    <div class="upgrade-title" id="upgrade-title">SELECT AIRFRAME MODULE</div>
+    <div class="upgrade-sub" id="upgrade-sub">Choose 1 permanent upgrade for this sortie</div>
+    <div class="upgrade-cards" id="upgrade-cards"></div>
+    <div class="upgrade-foot">PRESS <b>1</b> / <b>2</b> / <b>3</b> OR CLICK A MODULE TO INSTALL</div>
+  </div>
 </div>
-<script type="module" src="./src/main.js?v=artisan-v59"></script></script>
+<script type="module" src="./src/main.js?v=artisan-v76"></script>
 </body>
 </html>

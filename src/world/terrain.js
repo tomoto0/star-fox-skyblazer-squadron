@@ -42,48 +42,260 @@ const _tcOut = new THREE.Color();
 const _sparkTint = new THREE.Color(0xffedbe);
 const markShared = (m) => { if (m) { m.userData = m.userData || {}; m.userData.shared = true; } return m; };
 
-/* ---------------- shared materials (CC0 detail textures × vertex-colour palette) ---------------- */
-// detail maps are brightened toward white + desaturated so multiplying them
-// against the vertex-colour palette adds surface grain without dimming the hue
-const rockTex = loadDetailTexture(TEX + 'rock_diff.jpg', { repeat: 2.6, brightness: 2.5, contrast: 0.5, desat: 0.8 });
-const rockMat = markShared(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: rockTex }));
-rockMat.flatShading = true;
+/* ---------------- seamless procedural geological textures + Sobel normal maps ---------------- */
+function tileVal(u, v, px, py, seed) {
+  const x = (((u % 1) + 1) % 1) * px;
+  const y = (((v % 1) + 1) % 1) * py;
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const fx = x - x0, fy = y - y0;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const h = (ix, iy) => {
+    const rx = ((ix % px) + px) % px;
+    const ry = ((iy % py) + py) % py;
+    const n = Math.sin(rx * 127.1 + ry * 311.7 + seed * 74.7) * 43758.5453123;
+    return n - Math.floor(n);
+  };
+  const a = h(x0, y0), b = h(x0 + 1, y0);
+  const c = h(x0, y0 + 1), d = h(x0 + 1, y0 + 1);
+  return (a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy;
+}
 
-// Each zone uses a distinct CC0 rock surface. The high-poly source scans are
-// never imported: compact 1K maps enrich the authored, low-cost silhouettes.
+function tileFbm(u, v, px, py, seed, oct = 3) {
+  let sum = 0, amp = 0.56, norm = 0, m = 1;
+  for (let i = 0; i < oct; i++) {
+    sum += tileVal(u, v, px * m, py * m, seed + i * 19.3) * amp;
+    norm += amp; amp *= 0.5; m *= 2;
+  }
+  return sum / norm;
+}
+
+function buildGeoTexturePair(size, repeat, evalPixel, normalStrength = 2.6, withEmissive = false) {
+  if (typeof document === 'undefined') return { map: null, normalMap: null, emissiveMap: null };
+  const cDiff = document.createElement('canvas'); cDiff.width = cDiff.height = size;
+  const gDiff = cDiff.getContext('2d');
+  const idDiff = gDiff.createImageData(size, size);
+  const dDiff = idDiff.data;
+
+  const H = new Float32Array(size * size);
+  let cEm = null, gEm = null, idEm = null, dEm = null;
+  if (withEmissive) {
+    cEm = document.createElement('canvas'); cEm.width = cEm.height = size;
+    gEm = cEm.getContext('2d');
+    idEm = gEm.createImageData(size, size);
+    dEm = idEm.data;
+  }
+
+  const out = { h: 0.5, r: 210, g: 210, b: 210, er: 0, eg: 0, eb: 0 };
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      evalPixel(u, v, out);
+      const idx = y * size + x;
+      H[idx] = out.h;
+      const p = idx * 4;
+      dDiff[p] = clamp(out.r, 0, 255);
+      dDiff[p + 1] = clamp(out.g, 0, 255);
+      dDiff[p + 2] = clamp(out.b, 0, 255);
+      dDiff[p + 3] = 255;
+      if (dEm) {
+        dEm[p] = clamp(out.er, 0, 255);
+        dEm[p + 1] = clamp(out.eg, 0, 255);
+        dEm[p + 2] = clamp(out.eb, 0, 255);
+        dEm[p + 3] = 255;
+      }
+    }
+  }
+  gDiff.putImageData(idDiff, 0, 0);
+
+  // Seamless periodic Sobel normal map from heightfield
+  const cNorm = document.createElement('canvas'); cNorm.width = cNorm.height = size;
+  const gNorm = cNorm.getContext('2d');
+  const idNorm = gNorm.createImageData(size, size);
+  const dNorm = idNorm.data;
+  for (let y = 0; y < size; y++) {
+    const ym = (y - 1 + size) % size, yp = (y + 1) % size;
+    for (let x = 0; x < size; x++) {
+      const xm = (x - 1 + size) % size, xp = (x + 1) % size;
+      const tl = H[ym * size + xm], tc = H[ym * size + x], tr = H[ym * size + xp];
+      const ml = H[y * size + xm],                         mr = H[y * size + xp];
+      const bl = H[yp * size + xm], bc = H[yp * size + x], br = H[yp * size + xp];
+      const dx = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
+      const dy = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+      const nx = -dx * normalStrength;
+      const ny = dy * normalStrength;
+      const nz = 1.0;
+      const inv = 1 / Math.hypot(nx, ny, nz);
+      const p = (y * size + x) * 4;
+      dNorm[p] = Math.round((nx * inv * 0.5 + 0.5) * 255);
+      dNorm[p + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
+      dNorm[p + 2] = Math.round((nz * inv * 0.5 + 0.5) * 255);
+      dNorm[p + 3] = 255;
+    }
+  }
+  gNorm.putImageData(idNorm, 0, 0);
+
+  const prep = (canvas, isColor) => {
+    const t = new THREE.CanvasTexture(canvas);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(repeat, repeat);
+    if (isColor) t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    return markShared(t);
+  };
+  let emissiveMap = null;
+  if (cEm) {
+    gEm.putImageData(idEm, 0, 0);
+    emissiveMap = prep(cEm, true);
+  }
+  return { map: prep(cDiff, true), normalMap: prep(cNorm, false), emissiveMap };
+}
+
+// 1. AZURE SEA — seamless wave-carved coastal slate & columnar sea-basalt strata (replaces non-tileable UV atlas)
+const seaCliffMaps = buildGeoTexturePair(256, 2.4, (u, v, o) => {
+  const warp = (tileFbm(u, v, 4, 4, 3.1, 3) - 0.5) * 0.24;
+  const strataRaw = Math.sin((v * 5 + warp) * TAU);
+  const strata = 0.5 + 0.5 * Math.tanh(strataRaw * 2.1);
+  const fineBand = 0.5 + 0.5 * Math.sin((v * 15 + warp * 1.8) * TAU);
+  const jointRaw = Math.abs(tileFbm(u, v, 8, 2, 11.4, 2) - 0.5) * 2;
+  const crack = Math.pow(clamp(1 - jointRaw * 5.2, 0, 1), 2.1);
+  const grain = tileFbm(u, v, 16, 16, 27.9, 2);
+  const h = clamp(0.18 + strata * 0.44 + fineBand * 0.14 + grain * 0.18 - crack * 0.46, 0, 1);
+  // Crisp bright-normalized diffuse (~208 mean) with deep shadow fractures & salt-kissed edges
+  const ledgeHi = Math.pow(strata, 2.2) * 28;
+  const tone = 166 + h * 68 + ledgeHi - crack * 86;
+  o.h = h;
+  o.r = tone * 0.96;
+  o.g = tone * 1.00;
+  o.b = tone * 1.04;
+}, 2.9);
+
+// 2. DUNE SEA CLIFFS — seamless wind-carved Navajo/Monument Valley cross-bedded sandstone strata
+const duneCliffMaps = buildGeoTexturePair(256, 2.8, (u, v, o) => {
+  const warp = (tileFbm(u, v, 3, 4, 41.2, 3) - 0.5) * 0.22;
+  const beds = 0.5 + 0.5 * Math.sin((v * 7 + warp * 1.5) * TAU);
+  const cross = 0.5 + 0.5 * Math.sin((v * 19 + u * 2 + warp * 2.2) * TAU);
+  const shelf = Math.pow(beds, 1.45);
+  const fissure = Math.pow(clamp(1 - Math.abs(tileFbm(u, v, 6, 3, 53.7, 2) - 0.5) * 9.5, 0, 1), 2.0);
+  const grain = tileVal(u, v, 24, 24, 67.1);
+  const h = clamp(0.16 + shelf * 0.52 + cross * 0.18 + grain * 0.12 - fissure * 0.36, 0, 1);
+  const warmShift = (beds - 0.5) * 18;
+  const base = 172 + h * 66 - fissure * 74;
+  o.h = h;
+  o.r = base + warmShift * 0.8 + 8;
+  o.g = base + warmShift * 0.2;
+  o.b = base - warmShift * 0.6 - 10;
+}, 2.7);
+
+// 3. DUNE SEA FLOOR — sweeping S-curved wind-blown golden sand dune ripples (STAR_FOX_3 concept art!)
+const duneFloorMaps = buildGeoTexturePair(256, 22, (u, v, o) => {
+  const swerve = Math.sin((u * 2 - v) * TAU) * 0.14 + (tileFbm(u, v, 4, 4, 83.5, 2) - 0.5) * 0.22;
+  const phase = (v * 9 + u * 2 + swerve) * TAU;
+  // Asymmetric eolian ripple profile: gentle windward slope, crisp leeward slip-face
+  const wave = 0.5 + 0.5 * Math.sin(phase + Math.sin(phase) * 0.34);
+  const crest = Math.pow(wave, 1.55);
+  const micro = tileVal(u, v, 32, 32, 91.2) * 0.10;
+  const h = clamp(crest * 0.86 + micro, 0, 1);
+  const lit = 186 + h * 64;
+  o.h = h;
+  o.r = lit + 8;
+  o.g = lit + 1;
+  o.b = lit - 14;
+}, 3.4);
+
+// 4. EMBER CANYON — cooled volcanic basalt plates + incandescent magma fissure veins (STAR_FOX_2 concept art!)
+const emberFloorMaps = buildGeoTexturePair(256, 16, (u, v, o) => {
+  const n1 = tileFbm(u, v, 5, 5, 107.3, 3);
+  const n2 = tileFbm(u, v, 9, 9, 129.1, 2);
+  const crackA = Math.pow(clamp(1 - Math.abs(n1 - 0.5) * 11.5, 0, 1), 2.3);
+  const crackB = Math.pow(clamp(1 - Math.abs(n2 - 0.5) * 14.0, 0, 1), 2.6) * 0.65;
+  const crack = clamp(Math.max(crackA, crackB), 0, 1);
+  const slab = 0.45 + tileFbm(u, v, 12, 12, 141.7, 2) * 0.45;
+  const h = clamp(slab * (1 - crack * 0.85), 0, 1);
+  const tone = 165 + h * 70 - crack * 45;
+  o.h = h;
+  o.r = tone + crack * 55;
+  o.g = tone * 0.94 + crack * 18;
+  o.b = tone * 1.02 - crack * 28;
+  // Molten fissure emissive glow concentrated tightly in the deepest cracks
+  const glow = Math.pow(crack, 1.45);
+  o.er = glow * 255;
+  o.eg = glow * glow * 165 + glow * 45;
+  o.eb = glow * glow * glow * 70;
+}, 3.1, true);
+
+// Dedicated magma-fissure glow map for Ember Canyon volcanic cliff faces
+const emberCliffVeinMaps = buildGeoTexturePair(256, 3.4, (u, v, o) => {
+  const n1 = tileFbm(u, v, 4, 6, 163.2, 3);
+  const strataCrack = Math.pow(clamp(1 - Math.abs(Math.sin((v * 4 + (n1 - 0.5) * 0.65) * TAU)) * 6.5, 0, 1), 2.4);
+  const vertCrack = Math.pow(clamp(1 - Math.abs(n1 - 0.5) * 12.5, 0, 1), 2.2);
+  const glow = clamp(Math.max(strataCrack * 0.82, vertCrack), 0, 1);
+  o.h = 1 - glow * 0.5;
+  o.r = o.g = o.b = 200;
+  o.er = glow * 255;
+  o.eg = glow * glow * 155 + glow * 40;
+  o.eb = glow * glow * glow * 55;
+}, 1.5, true);
+
+/* ---------------- shared zone-tuned rock, cliff & floor materials ---------------- */
 function makeCliffMaterial(diffusePath, normalPath, opts = {}) {
   const repeat = opts.repeat ?? 2.5;
-  const map = loadDetailTexture(TEX + diffusePath, {
-    repeat, brightness: opts.brightness ?? 2.15, contrast: opts.contrast ?? 0.60, desat: opts.desat ?? 0.5,
+  const map = opts.map ?? loadDetailTexture(TEX + diffusePath, {
+    repeat,
+    targetMean: opts.targetMean ?? 212,
+    contrast: opts.contrast ?? 0.90,
+    desat: opts.desat ?? 0.34,
   });
-  const normal = new THREE.TextureLoader().load(TEX + normalPath);
-  normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
-  normal.repeat.set(repeat, repeat);
-  const material = markShared(new THREE.MeshToonMaterial({
-    vertexColors: true, gradientMap: toonGradient(), map, normalMap: normal,
-    normalScale: new THREE.Vector2(opts.normal ?? 0.4, opts.normal ?? 0.4),
-  }));
+  let normal = opts.normalMap ?? null;
+  if (!normal && normalPath) {
+    normal = new THREE.TextureLoader().load(TEX + normalPath);
+    normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
+    normal.repeat.set(repeat, repeat);
+    markShared(normal);
+  }
+  const cfg = {
+    vertexColors: true, gradientMap: toonGradient(), map,
+  };
+  if (normal) {
+    cfg.normalMap = normal;
+    cfg.normalScale = new THREE.Vector2(opts.normal ?? 0.65, opts.normal ?? 0.65);
+  }
+  if (opts.emissiveMap) {
+    cfg.emissive = new THREE.Color(opts.emissive ?? 0xff5a22);
+    cfg.emissiveMap = opts.emissiveMap;
+    cfg.emissiveIntensity = opts.emissiveIntensity ?? 0.65;
+  }
+  const material = markShared(new THREE.MeshToonMaterial(cfg));
   material.flatShading = true;
   return material;
 }
 
 const CLIFF_MATS = {
-  // AZURE SEA — wet, blue-grey sea-cut stone with a restrained normal response.
-  sea: makeCliffMaterial('coastal_cliff_04/diffuse.jpg', 'coastal_cliff_04/normal_gl.jpg', { repeat: 2.1, brightness: 2.15, contrast: 0.62, desat: 0.52, normal: 0.38 }),
-  // CASCADE GORGE — warm layered sedimentary faces, visibly striated under daylight.
-  gorge: makeCliffMaterial('zone_cliffs/gorge/diffuse.jpg', 'zone_cliffs/gorge/normal_gl.jpg', { repeat: 3.0, brightness: 2.28, contrast: 0.58, desat: 0.32, normal: 0.45 }),
-  // EMBER CANYON — dark fractured volcanic rock, coloured by the zone's red vertex lighting.
-  ember: makeCliffMaterial('zone_cliffs/ember/diffuse.jpg', 'zone_cliffs/ember/normal_gl.jpg', { repeat: 3.8, brightness: 1.92, contrast: 0.70, desat: 0.42, normal: 0.58 }),
-  // DUNE SEA — dusty, weathered gravel and warm sandstone with softened relief.
-  dune: makeCliffMaterial('zone_cliffs/dune/diffuse.jpg', 'zone_cliffs/dune/normal_gl.jpg', { repeat: 3.35, brightness: 2.38, contrast: 0.54, desat: 0.30, normal: 0.32 }),
+  // AZURE SEA — seamless wave-carved coastal basalt & slate with Sobel normal relief
+  sea: makeCliffMaterial(null, null, { map: seaCliffMaps.map, normalMap: seaCliffMaps.normalMap, normal: 0.72 }),
+  // CASCADE GORGE — auto-leveled warm layered sedimentary sandstone scan + crisp normal map
+  gorge: makeCliffMaterial('zone_cliffs/gorge/diffuse.jpg', 'zone_cliffs/gorge/normal_gl.jpg', { repeat: 2.8, targetMean: 214, contrast: 0.94, desat: 0.24, normal: 0.68 }),
+  // EMBER CANYON — auto-leveled fractured volcanic basalt + glowing molten magma fissures
+  ember: makeCliffMaterial('zone_cliffs/ember/diffuse.jpg', 'zone_cliffs/ember/normal_gl.jpg', {
+    repeat: 3.4, targetMean: 204, contrast: 1.08, desat: 0.28, normal: 0.78,
+    emissive: 0xff5e24, emissiveMap: emberCliffVeinMaps.emissiveMap, emissiveIntensity: 0.68,
+  }),
+  // DUNE SEA — seamless cross-bedded wind-eroded golden/terracotta sandstone strata
+  dune: makeCliffMaterial(null, null, { map: duneCliffMaps.map, normalMap: duneCliffMaps.normalMap, normal: 0.66 }),
 };
 const cliffMat = CLIFF_MATS.sea;
-// Shared wet-rock layer for sea stacks. Reusing this material makes the tide line
-// readable without adding texture fetches or per-stack material allocations.
+let _activeCliffMat = CLIFF_MATS.sea;
+const rockMat = CLIFF_MATS.sea;
+// Shared waterline layers for sea stacks & Cascade Gorge river rocks (STAR_FOX_1 & STAR_FOX_4)
 const seaWetMat = markShared(toonMat(0x163c58, { emissive: 0x20688c, emissiveIntensity: 0.26, flat: true }));
 const seaSaltMat = markShared(toonMat(0xb6e8f2, { emissive: 0xdffbff, emissiveIntensity: 0.34, flat: true }));
 const seaFoamMat = markShared(new THREE.MeshBasicMaterial({
   color: 0xe6fbff, transparent: true, opacity: 0.62, side: THREE.DoubleSide,
+  depthWrite: false, fog: true,
+}));
+const gorgeWetMat = markShared(toonMat(0x3a3228, { emissive: 0x16384c, emissiveIntensity: 0.22, flat: true }));
+const gorgeFoamMat = markShared(new THREE.MeshBasicMaterial({
+  color: 0xf0fcff, transparent: true, opacity: 0.78, side: THREE.DoubleSide,
   depthWrite: false, fog: true,
 }));
 
@@ -99,72 +311,33 @@ function stableCliffMaterial(zoneId) {
   return m;
 }
 
-const sandTex = loadDetailTexture(TEX + 'sand_diff.jpg', { repeat: 18, brightness: 2.7, contrast: 0.45, desat: 0.85 });
-const sandMat = markShared(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: sandTex }));
-sandMat.flatShading = true;
-
-const groundRockTex = loadDetailTexture(TEX + 'rock_diff.jpg', { repeat: 15, brightness: 2.4, contrast: 0.5, desat: 0.8 });
-const emberGroundMat = markShared(new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), map: groundRockTex }));
-emberGroundMat.flatShading = true;
-
-// Zone floor materials are separate from cliff surfaces: their high repeat count
-// reads as broad terrain at flight speed while vertex colours retain the authored
-// route visibility and zone lighting.
-function makeFloorMaterial(diffusePath, normalPath, opts = {}) {
-  const repeat = opts.repeat ?? 16;
-  const map = loadDetailTexture(TEX + diffusePath, {
-    repeat, brightness: opts.brightness ?? 2.2, contrast: opts.contrast ?? 0.54, desat: opts.desat ?? 0.55,
-  });
-  const normal = new THREE.TextureLoader().load(TEX + normalPath);
-  normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
-  normal.repeat.set(repeat, repeat);
-  const material = markShared(new THREE.MeshToonMaterial({
-    vertexColors: true, gradientMap: toonGradient(), map, normalMap: normal,
-    normalScale: new THREE.Vector2(opts.normal ?? 0.30, opts.normal ?? 0.30),
-  }));
-  material.flatShading = true;
-  return material;
-}
 const FLOOR_MATS = {
-  // CASCADE GORGE is supplied through the blue river surface; its dry banks are
-  // deliberately kept under the wide water ribbon rather than becoming a noisy runway.
-  ember: makeFloorMaterial('zone_cliffs/ember/diffuse.jpg', 'zone_cliffs/ember/normal_gl.jpg', { repeat: 18, brightness: 1.85, contrast: 0.72, desat: 0.48, normal: 0.46 }),
-  dune: makeFloorMaterial('zone_floors/dune/diffuse.jpg', 'zone_floors/dune/normal_gl.jpg', { repeat: 23, brightness: 2.26, contrast: 0.50, desat: 0.42, normal: 0.22 }),
+  // EMBER CANYON — cooled volcanic basalt slabs with glowing magma micro-fissures
+  ember: markShared(Object.assign(new THREE.MeshToonMaterial({
+    vertexColors: true, gradientMap: toonGradient(),
+    map: emberFloorMaps.map, normalMap: emberFloorMaps.normalMap,
+    normalScale: new THREE.Vector2(0.68, 0.68),
+    emissive: new THREE.Color(0xff5a22), emissiveMap: emberFloorMaps.emissiveMap, emissiveIntensity: 0.44,
+  }), { flatShading: true })),
+  // DUNE SEA — sweeping wind-carved golden sand ripples catching crisp directional sun highlights
+  dune: markShared(Object.assign(new THREE.MeshToonMaterial({
+    vertexColors: true, gradientMap: toonGradient(),
+    map: duneFloorMaps.map, normalMap: duneFloorMaps.normalMap,
+    normalScale: new THREE.Vector2(0.84, 0.84),
+  }), { flatShading: true })),
 };
+const sandMat = FLOOR_MATS.dune;
+const emberGroundMat = FLOOR_MATS.ember;
 
-// A compact procedural surface map preserves animated vertex waves while giving
-// AZURE SEA and CASCADE GORGE visibly different floor textures without a large
-// translucent water mesh or an additional full-resolution asset download.
-function makeWaterSurfaceTexture(deep, crest, foam = 0.28) {
-  const c = document.createElement('canvas'); c.width = c.height = 256;
-  const g = c.getContext('2d');
-  g.fillStyle = deep; g.fillRect(0, 0, 256, 256);
-  g.globalAlpha = 0.36;
-  for (let y = -20; y < 280; y += 22) {
-    g.strokeStyle = crest; g.lineWidth = 2.2;
-    g.beginPath();
-    for (let x = -20; x < 280; x += 10) {
-      const yy = y + Math.sin(x * 0.085 + y * 0.057) * 3.1;
-      x < -10 ? g.moveTo(x, yy) : g.lineTo(x, yy);
-    }
-    g.stroke();
-  }
-  g.globalAlpha = foam;
-  g.fillStyle = '#ffffff';
-  for (let i = 0; i < 170; i++) g.fillRect((i * 47) % 256, (i * 91 + 13) % 256, 1.4, 1.4);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(9, 7);
-  tex.anisotropy = 2;
-  return tex;
-}
 function makeWaterMaterial(opts) {
   const material = new THREE.ShaderMaterial({
     uniforms: THREE.UniformsUtils.merge([
       THREE.UniformsLib.fog,
       {
         uTime: { value: 0 },
+        uScroll: { value: 0 },
+        uSunDir: { value: new THREE.Vector3(0.14, 0.28, -1).normalize() },
+        uMode: { value: opts.mode ?? 0 },
         uDeep: { value: new THREE.Color(opts.deep) },
         uShallow: { value: new THREE.Color(opts.shallow) },
         uFoamColor: { value: new THREE.Color(opts.foam) },
@@ -196,6 +369,9 @@ function makeWaterMaterial(opts) {
     `,
     fragmentShader: `
       uniform float uTime;
+      uniform float uScroll;
+      uniform vec3 uSunDir;
+      uniform float uMode;
       uniform vec3 uDeep;
       uniform vec3 uShallow;
       uniform vec3 uFoamColor;
@@ -211,40 +387,104 @@ function makeWaterMaterial(opts) {
       varying vec3 vWorldNormal;
       #include <fog_pars_fragment>
 
-      // Two curved analytical flow bands cost far less than a 3×3 cellular
-      // lookup in every fragment, while retaining small broken ripple highlights.
-      float ripple(vec2 p) {
+      // 4-octave analytical wave heightfield for crisp perturbed surface normals even without CPU wave meshes
+      float waveHeight(vec2 p, float t) {
+        float w1 = sin(p.y * uScale - t * 1.35 + sin(p.x * uScale * 0.62 + t * 0.4) * 1.65);
+        float w2 = sin((p.x * 1.35 + p.y * 0.52) * uScale + t * 0.95);
+        float w3 = sin((p.x * 2.15 - p.y * 1.68) * uScale * 1.4 - t * 1.75);
+        float w4 = sin((p.x * 0.85 + p.y * 2.95) * uScale * 2.1 + t * 2.35);
+        return w1 * 0.44 + w2 * 0.26 + w3 * 0.18 + w4 * 0.12;
+      }
+
+      float ripplePattern(vec2 p) {
         float a = sin(p.x * 2.65 + p.y * 0.78 + sin(p.y * 0.72) * 0.9) * 0.5 + 0.5;
         float b = sin(p.y * 3.85 - p.x * 1.16 + sin(p.x * 0.55) * 0.8) * 0.5 + 0.5;
         float c = sin((p.x + p.y) * 1.72) * 0.5 + 0.5;
-        return smoothstep(0.74, 0.96, a * 0.46 + b * 0.38 + c * 0.16);
+        return smoothstep(0.72, 0.96, a * 0.46 + b * 0.38 + c * 0.16);
       }
+
       void main() {
-        vec2 p = vWorldPos.xz;
-        float drift = uTime * uFlow;
-        float longWave = sin(p.y * uScale + drift + sin(p.x * uScale * 0.64) * 1.8) * 0.5 + 0.5;
-        float crossWave = sin(p.x * uScale * 1.45 - drift * 0.72 + p.y * uScale * 0.28) * 0.5 + 0.5;
-        float tiny = ripple(p * (uScale * 1.34) + vec2(-drift * 0.22, drift * 0.78));
-        float crest = smoothstep(0.78, 0.98, longWave * 0.72 + crossWave * 0.28);
-        float foam = (crest * 0.66 + tiny * 0.34) * uFoam;
-        vec3 col = mix(uDeep, uShallow, longWave * 0.62 + crossWave * 0.18 + tiny * 0.12);
-        // Lava gains broad cooling plates at a much lower frequency than the flow.
-        // uCrust is zero for water, so the extra detail has no visual impact there.
-        float plateA = sin(p.x * 0.24 + sin(p.y * 0.17) * 1.4 + drift * 0.18) * 0.5 + 0.5;
-        float plateB = sin(p.y * 0.31 - p.x * 0.13 + sin(p.x * 0.11) * 1.7) * 0.5 + 0.5;
-        float cooling = smoothstep(0.72, 0.96, plateA * 0.56 + plateB * 0.44) * uCrust;
-        col = mix(col, uDeep * 0.72, cooling * 0.72);
-        vec3 viewDir = normalize(cameraPosition - vWorldPos);
-        float facing = 1.0 - max(dot(normalize(vWorldNormal), viewDir), 0.0);
-        float fresnel = pow(facing, 2.6) * uFresnel;
-        vec3 lightDir = normalize(vec3(0.32, 0.84, -0.44));
-        float highlight = pow(max(dot(reflect(-viewDir, normalize(vWorldNormal)), lightDir), 0.0), 46.0);
-        // Keep foam and reflected light below combat-reticle brightness. This preserves
-        // water motion while preventing large white patches from masking projectiles.
-        col = mix(col, uFoamColor, foam * 0.62);
-        col += uSpecular * (fresnel * 0.34 + highlight * (0.14 + crest * 0.28));
-        // Heat remains visible in cracks and moving channels, rather than lighting the full ribbon.
-        col += uFoamColor * uGlow * (0.13 + longWave * 0.23 + crest * 0.42) * (1.0 - cooling * 0.62);
+        // World-anchored scrolling coordinates: ocean & river rush smoothly toward the cockpit (+Z) at flight speed!
+        float riverExtra = (uMode > 0.5 && uMode < 1.5) ? uTime * 16.0 : 0.0;
+        vec2 wp = vec2(vWorldPos.x, vWorldPos.z - uScroll - riverExtra);
+        float t = uTime * uFlow;
+
+        // Analytical finite-difference normal perturbation for glittering sunlit wave facets
+        float eps = 1.6;
+        float hC = waveHeight(wp, t);
+        float hX = waveHeight(wp + vec2(eps, 0.0), t);
+        float hZ = waveHeight(wp + vec2(0.0, eps), t);
+        float slope = (uMode > 1.5 && uMode < 2.5) ? 0.18 : 0.46;
+        vec3 N = normalize(vWorldNormal + vec3((hC - hX) * slope, 0.0, (hC - hZ) * slope));
+
+        float hNorm = clamp(hC * 0.5 + 0.5, 0.0, 1.0);
+        float longWave = sin(wp.y * uScale - t + sin(wp.x * uScale * 0.62) * 1.7) * 0.5 + 0.5;
+        float crossWave = sin(wp.x * uScale * 1.42 + t * 0.72 - wp.y * uScale * 0.32) * 0.5 + 0.5;
+        float tiny = ripplePattern(wp * (uScale * 1.38) + vec2(t * 0.18, -t * 0.85));
+        float crest = smoothstep(0.70, 0.96, hNorm * 0.64 + crossWave * 0.36);
+
+        vec3 col = mix(uDeep, uShallow, clamp(hNorm * 0.56 + longWave * 0.24 + tiny * 0.16, 0.0, 1.0));
+        float foam = (crest * 0.62 + tiny * 0.38) * uFoam;
+
+        if (uMode < 0.5) {
+          // AZURE SEA (STAR_FOX_4): deep Prussian swells, luminous teal subsurface crests & wind-streaked sea foam
+          float subsurf = pow(max(hNorm, 0.0001), 2.1) * 0.34;
+          col = mix(col, uShallow * 1.18, subsurf);
+          float windStreak = smoothstep(0.84, 0.98, sin(wp.x * 0.048 + sin(wp.y * 0.018) * 2.2) * 0.5 + 0.5)
+                           * smoothstep(0.62, 0.92, sin(wp.y * 0.026 - t * 0.6) * 0.5 + 0.5);
+          foam = max(foam, windStreak * 0.26);
+        } else if (uMode < 1.5) {
+          // CASCADE GORGE RIVER (STAR_FOX_1): deep cobalt center, turquoise canyon-wall shallows & stylized cel swirls
+          float worldZ = vWorldPos.z - uScroll;
+          float routeCenter = sin(worldZ / 580.0 + 1.1) * 44.0;
+          float bankDist = abs(vWorldPos.x - routeCenter);
+          float shallowBank = smoothstep(68.0, 210.0, bankDist);
+          col = mix(col, uShallow * 1.24, shallowBank * 0.68);
+          // Painterly concentric water-swirl eddies gliding downstream!
+          vec2 ep = wp * 0.046;
+          vec2 cell = fract(ep) - 0.5;
+          vec2 warpCell = cell + 0.11 * vec2(sin(ep.y * 4.5 + uTime * 2.1), cos(ep.x * 4.5 - uTime * 1.7));
+          float r = length(warpCell);
+          float ang = atan(warpCell.y, warpCell.x + 0.0001);
+          float swirlBand = smoothstep(0.64, 0.88, sin(r * 28.0 - uTime * 3.4 + ang * 2.0));
+          float swirlMask = (1.0 - smoothstep(0.14, 0.42, r)) * smoothstep(0.05, 0.13, r);
+          float eddy = swirlBand * swirlMask;
+          // Crisp bright river rapid streaks & shoreline foam near canyon walls
+          float rapidLine = smoothstep(0.80, 0.96, sin(wp.x * 0.095 + sin(wp.y * 0.042) * 2.0) * 0.5 + 0.5) * crest;
+          float bankFoam = smoothstep(145.0, 245.0, bankDist) * (0.35 + crest * 0.65);
+          foam = clamp(foam + eddy * 0.52 + rapidLine * 0.28 + bankFoam * 0.52, 0.0, 0.92);
+        } else if (uMode < 2.5) {
+          // EMBER CANYON LAVA (STAR_FOX_2): cooled obsidian crust plates & incandescent magma veins
+          float plateA = sin(wp.x * 0.22 + sin(wp.y * 0.16) * 1.5 - t * 0.22) * 0.5 + 0.5;
+          float plateB = sin(wp.y * 0.29 - wp.x * 0.14 + sin(wp.x * 0.12) * 1.8 - t * 0.16) * 0.5 + 0.5;
+          float cooling = smoothstep(0.42, 0.86, plateA * 0.55 + plateB * 0.45) * uCrust;
+          float fissure = pow(max(1.0 - cooling, 0.0001), 2.4);
+          col = mix(uShallow * 1.15, uDeep * 0.62, cooling * 0.86);
+          col += uFoamColor * uGlow * (0.18 + fissure * 0.88 + crest * 0.35);
+          foam = fissure * 0.42;
+        } else {
+          // DUNE SEA OASIS (STAR_FOX_3): luminous turquoise spring with sparkling refracted caustics
+          float caust = ripplePattern(wp * 0.16 + vec2(t * 0.35, -t * 0.45))
+                      + ripplePattern(wp * 0.22 - vec2(t * 0.28, t * 0.32)) * 0.65;
+          col = mix(col, uShallow * 1.22, clamp(caust * 0.42, 0.0, 0.72));
+          foam = clamp(foam + caust * 0.24, 0.0, 0.85);
+        }
+
+        // View-dependent Fresnel sky reflection + dynamic sun-disc wave sparkle aligned to uSunDir
+        vec3 V = normalize(cameraPosition - vWorldPos);
+        float facing = 1.0 - max(dot(N, V), 0.0);
+        float fresnel = pow(max(facing, 0.0001), 2.5) * uFresnel;
+        vec3 L = normalize(uSunDir);
+        vec3 R = reflect(-V, N);
+        float specBroad = pow(max(dot(R, L), 0.0), 20.0);
+        float specSparkle = pow(max(dot(R, L), 0.0), 96.0);
+
+        col = mix(col, uFoamColor, foam * 0.64);
+        col += uSpecular * (fresnel * 0.38 + specBroad * (0.20 + crest * 0.18) + specSparkle * 0.68);
+        if (uMode < 1.5) {
+          col += uFoamColor * uGlow * (0.12 + crest * 0.28);
+        }
+
         gl_FragColor = vec4(col, uOpacity);
         #include <fog_fragment>
       }
@@ -255,12 +495,12 @@ function makeWaterMaterial(opts) {
   return material;
 }
 const WATER_MATS = {
-  sea: makeWaterMaterial({ deep: 0x0f4566, shallow: 0x1c8c9d, foam: 0xd8f3ec, specular: 0xffd49c, flow: 1.05, scale: 0.052, foamAmount: 0.20, fresnel: 0.52, glow: 0.018 }),
-  gorge: makeWaterMaterial({ deep: 0x14557a, shallow: 0x3297aa, foam: 0xd9f8ef, specular: 0xdff8ee, flow: 1.82, scale: 0.104, foamAmount: 0.24, fresnel: 0.36, glow: 0.03 }),
+  sea: makeWaterMaterial({ mode: 0, deep: 0x0b345c, shallow: 0x1a8ba3, foam: 0xe6f8f4, specular: 0xffcf84, flow: 1.15, scale: 0.056, foamAmount: 0.24, fresnel: 0.62, glow: 0.022 }),
+  gorge: makeWaterMaterial({ mode: 1, deep: 0x0b4388, shallow: 0x26a6bc, foam: 0xeafcff, specular: 0xe6fbff, flow: 1.75, scale: 0.098, foamAmount: 0.26, fresnel: 0.44, glow: 0.032 }),
 };
 const LIQUID_MATS = {
-  ember: makeWaterMaterial({ deep: 0x24090d, shallow: 0xe0441b, foam: 0xffb565, specular: 0xffc27c, flow: 0.70, scale: 0.096, foamAmount: 0.34, fresnel: 0.58, glow: 0.58, crust: 0.84 }),
-  dune: makeWaterMaterial({ deep: 0x176a92, shallow: 0x86d8dd, foam: 0xeaffed, specular: 0xfff0bd, flow: 0.66, scale: 0.085, foamAmount: 0.34, fresnel: 0.80, opacity: 0.82, glow: 0.18 }),
+  ember: makeWaterMaterial({ mode: 2, deep: 0x1d090e, shallow: 0xe8481c, foam: 0xffc668, specular: 0xffc478, flow: 0.78, scale: 0.096, foamAmount: 0.34, fresnel: 0.56, glow: 0.64, crust: 0.88 }),
+  dune: makeWaterMaterial({ mode: 3, deep: 0x146d96, shallow: 0x7be0e6, foam: 0xf2fff8, specular: 0xfff0be, flow: 0.68, scale: 0.088, foamAmount: 0.34, fresnel: 0.82, opacity: 0.86, glow: 0.18 }),
 };
 const FLUID_MATS = [...Object.values(WATER_MATS), ...Object.values(LIQUID_MATS)];
 
@@ -382,23 +622,28 @@ function vertexColoredRock(radius, height, baseColor, topColor, sides = 7) {
     pos.setZ(i, z0 * erosion * (0.90 + noise(theta * 0.8 + phase, yn) * 0.08));
     pos.setY(i, y + noise2(theta * 1.2 + phase, yn * 4.6) * height * 0.045);
     const strata = 0.5 + 0.5 * Math.sin(yn * Math.PI * bedding + noise(theta + phase, yn * 2) * 2.8);
-    const weather = 0.84 + strata * 0.16 + shelf * 0.35;
-    _tcOut.copy(_tc1).lerp(_tc2, Math.pow(yn, 1.55)).multiplyScalar(weather);
-    colors[i * 3] = _tcOut.r; colors[i * 3 + 1] = _tcOut.g; colors[i * 3 + 2] = _tcOut.b;
+    // Geological multi-band vertex shading: wet/grounded base AO, recessed rock crevices,
+    // alternating sedimentary strata contrast, overhang shelf highlights & sunlit summit crown!
+    const baseAO = yn < 0.18 ? (0.66 + (yn / 0.18) * 0.34) : 1.0;
+    const creviceAO = clamp(0.86 + (broad + chip) * 0.58, 0.72, 1.14);
+    const crownLift = yn > 0.76 ? ((yn - 0.76) / 0.24) * 0.18 : 0;
+    const weather = (0.78 + strata * 0.24 + shelf * 0.44) * baseAO * creviceAO + crownLift;
+    _tcOut.copy(_tc1).lerp(_tc2, Math.pow(yn, 1.45)).multiplyScalar(weather);
+    colors[i * 3] = clamp(_tcOut.r, 0, 1); colors[i * 3 + 1] = clamp(_tcOut.g, 0, 1); colors[i * 3 + 2] = clamp(_tcOut.b, 0, 1);
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
   return geo;
 }
 
-function makeRock(radius, height, base, top, sides) {
-  const m = new THREE.Mesh(vertexColoredRock(radius, height, base, top, sides), rockMat);
+function makeRock(radius, height, base, top, sides, material = _activeCliffMat) {
+  const m = new THREE.Mesh(vertexColoredRock(radius, height, base, top, sides), material);
   m.rotation.y = rand(TAU);
   return m;
 }
 
 /** Textured counterpart for high-visibility cliff faces and suspended landforms. */
-function makeCliffRock(radius, height, base, top, sides = 8, material = cliffMat) {
+function makeCliffRock(radius, height, base, top, sides = 8, material = _activeCliffMat) {
   const m = new THREE.Mesh(vertexColoredRock(radius, height, base, top, sides), material);
   m.rotation.y = rand(TAU);
   return m;
@@ -437,25 +682,28 @@ function buttressedCliff(radius, height, base, top, opts = {}) {
     y += tierH * rand(0.55, 0.72);
   }
 
-  // A talus fan and several exposed bedding ribs eliminate the isolated-block
-  // look at the base of large cliffs. These are visual children of the cliff; the
-  // parent collision volume remains unchanged and therefore predictable.
+  // A talus fan, carved sedimentary cornice ledges and exposed bedding ribs break up large cliffs.
   for (let i = 0; i < 7; i++) {
     const a = rand(TAU);
-    const talus = makeCliffRock(radius * rand(0.07, 0.19), height * rand(0.045, 0.14), base, top, 7, material);
+    const talus = makeCliffRock(radius * rand(0.08, 0.21), height * rand(0.05, 0.15), base, top, 7, material);
     talus.position.set(Math.cos(a) * radius * rand(0.72, 1.24), height * rand(0.02, 0.16), Math.sin(a) * radius * rand(0.72, 1.13));
     talus.rotation.z = rand(-0.22, 0.22);
     g.add(talus);
   }
-  for (let i = 0; i < 3; i++) {
-    const a = rand(TAU);
-    const rib = makeCliffRock(radius * rand(0.18, 0.31), Math.max(4, height * rand(0.035, 0.065)), base, top, 8, material);
-    rib.position.set(Math.cos(a) * radius * rand(0.58, 0.86), height * rand(0.24, 0.72), Math.sin(a) * radius * rand(0.58, 0.86));
-    rib.scale.set(1.45, 0.62, 0.45);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * TAU + rand(-0.35, 0.35);
+    const rib = makeCliffRock(radius * rand(0.20, 0.34), Math.max(4.5, height * rand(0.04, 0.07)), base, top, 8, material);
+    rib.position.set(Math.cos(a) * radius * rand(0.56, 0.88), height * rand(0.22, 0.76), Math.sin(a) * radius * rand(0.56, 0.88));
+    rib.scale.set(1.52, 0.58, 0.48);
     rib.rotation.set(rand(-0.10, 0.10), a, rand(-0.20, 0.20));
     g.add(rib);
   }
-    return g;
+  // Fractured summit boulder crown perched asymmetrically near cliff crest
+  const crown = makeCliffRock(radius * 0.42, height * 0.16, top, top, 7, material);
+  crown.position.set(rand(-radius * 0.22, radius * 0.22), height * 0.84, rand(-radius * 0.20, radius * 0.20));
+  crown.rotation.z = rand(-0.14, 0.14);
+  g.add(crown);
+  return g;
 }
 /**
  * Broad, low-frequency eroded strata used only as non-colliding side scenery.
@@ -503,9 +751,23 @@ function riftIslet(radius, height, base, top, accent = 0x8feeff, material = clif
   crown.position.y = height * 0.26;
   crown.scale.set(1.12, 0.72, 0.96);
   g.add(crown);
+  // Ancient dimensional obelisk spire + luminous floating containment halo anchored atop each rift sky island!
+  const obelisk = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius * 0.08, radius * 0.18, height * 0.48, 6),
+    toonMat(0x2a2f42, { map: terrainArmorTex, flat: true })
+  );
+  obelisk.position.y = height * 0.46;
+  g.add(obelisk);
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(radius * 0.34, Math.max(0.8, radius * 0.032), 6, 18),
+    toonMat(0x161c2c, { emissive: accent, emissiveIntensity: 1.35, flat: true })
+  );
+  halo.rotation.x = Math.PI / 2 + 0.18;
+  halo.position.y = height * 0.56;
+  g.add(halo);
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * TAU + rand(-0.22, 0.22);
-    const shard = new THREE.Mesh(new THREE.ConeGeometry(radius * rand(0.08, 0.15), height * rand(0.18, 0.34), 5), toonMat(0x1f2833, { emissive: accent, emissiveIntensity: 0.30, flat: true }));
+    const shard = new THREE.Mesh(new THREE.ConeGeometry(radius * rand(0.08, 0.15), height * rand(0.18, 0.34), 5), toonMat(0x1f2833, { emissive: accent, emissiveIntensity: 0.45, flat: true }));
     shard.position.set(Math.cos(a) * radius * rand(0.34, 0.84), -height * rand(0.37, 0.62), Math.sin(a) * radius * rand(0.30, 0.74));
     shard.rotation.z = Math.cos(a) * rand(0.25, 0.56);
     g.add(shard);
@@ -609,34 +871,59 @@ function mossLedge(radius, color) {
 }
 
 /**
- * A side-framing natural arch: heavy weathered legs and an offset faceted crown.
- * It is exclusively scenery and must be positioned outside the route by callers.
+ * Sculpted interlocking stone-chain natural arch: heavy weathered buttress piers,
+ * asymmetric chained boulder crown & hanging underside stalactite stone teeth.
+ * Callers register exact solid per-stone colliders via `_addNaturalArchColliders()`.
  */
 function naturalStoneArch(width, height, base, top, material = cliffMat) {
   const g = new THREE.Group();
   const legH = height * 0.68;
   const legR = width * 0.18;
+  const spanR = width * 0.43;
+  const crownY = legH * 0.58;
+  const tube = Math.max(4.5, width * 0.095);
   for (const side of [-1, 1]) {
-    const leg = makeCliffRock(legR * rand(0.92, 1.08), legH, base, top, 7, material);
-    leg.position.set(side * width * 0.43, legH * 0.31, rand(-width * 0.05, width * 0.05));
-    leg.rotation.z = side * rand(-0.10, 0.10);
+    const leg = makeCliffRock(legR * rand(0.92, 1.08), legH, base, top, 8, material);
+    leg.position.set(side * spanR, legH * 0.32, rand(-width * 0.04, width * 0.04));
+    leg.rotation.z = side * rand(-0.08, 0.08);
     g.add(leg);
-    const foot = makeCliffRock(legR * 1.28, Math.max(4, legH * 0.13), base, top, 7, material);
-    foot.position.set(side * width * 0.45, Math.max(1.5, legH * 0.055), rand(-width * 0.08, width * 0.08));
-    foot.scale.z = 1.16; g.add(foot);
+    const foot = makeCliffRock(legR * 1.32, Math.max(5, legH * 0.16), base, top, 8, material);
+    foot.position.set(side * (spanR + legR * 0.14), Math.max(1.5, legH * 0.06), rand(-width * 0.08, width * 0.08));
+    foot.scale.z = 1.18; g.add(foot);
+    // Tiered eroded shoulder shelf jutting from each arch pier
+    const shelf = makeCliffRock(legR * 0.85, Math.max(3.5, legH * 0.09), base, top, 7, material);
+    shelf.position.set(side * (spanR + legR * 0.45), legH * 0.48, 0);
+    shelf.scale.set(1.25, 0.65, 0.85); g.add(shelf);
   }
-  const crown = new THREE.Mesh(new THREE.TorusGeometry(width * 0.43, Math.max(3.2, width * 0.085), 6, 14, Math.PI), material);
-  crown.position.set(0, legH * 0.60, 0);
-  crown.scale.set(1, 1.14, 0.86);
-  crown.rotation.z = rand(-0.12, 0.12);
-  g.add(crown);
+  // Interlocking stone-chain boulder segments along the arch curve (replaces smooth torus!)
+  const segs = 9;
+  const stonePoints = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    const a = Math.PI * t;
+    const bx = Math.cos(a) * spanR;
+    const by = crownY + Math.sin(a) * spanR * 0.96;
+    const bz = Math.sin(a * 2.2) * (width * 0.03);
+    const boulder = makeCliffRock(tube * rand(0.86, 1.14), tube * rand(1.75, 2.35), base, top, 8, material);
+    boulder.position.set(bx, by, bz);
+    boulder.rotation.set(rand(-0.14, 0.14), a + Math.PI / 2, rand(-0.22, 0.22));
+    g.add(boulder);
+    stonePoints.push({ x: bx, y: by, z: bz, rh: tube * 1.04, hy: tube * 1.12 });
+    if (i >= 2 && i <= segs - 2 && i % 2 === 0) {
+      const tooth = new THREE.Mesh(new THREE.ConeGeometry(tube * rand(0.28, 0.44), tube * rand(0.95, 1.55), 6), material);
+      tooth.rotation.x = Math.PI;
+      tooth.position.set(bx, by - tube * 1.05, bz);
+      g.add(tooth);
+    }
+  }
   for (let i = 0; i < 4; i++) {
     const fragment = makeCliffRock(width * rand(0.06, 0.12), height * rand(0.06, 0.13), base, top, 6, material);
     const side = i % 2 ? 1 : -1;
     fragment.position.set(side * width * rand(0.22, 0.58), rand(1, height * 0.18), rand(-width * 0.28, width * 0.28));
     fragment.rotation.z = side * rand(-0.24, 0.24); g.add(fragment);
   }
-  g.userData.noCollide = true;
+  g.userData.noCollide = true; // per-stone rim + pier colliders registered cleanly via _addNaturalArchColliders()
+  g.userData.archSpec = { spanR, legH, legR, stonePoints };
   return g;
 }
 
@@ -770,6 +1057,14 @@ function desertWreckage(scale = 1) {
   const wing = new THREE.Mesh(new THREE.BoxGeometry(6.8 * scale, 0.45 * scale, 3.2 * scale), wingMat);
   wing.position.set(2.4 * scale, 3.4 * scale, -1.8 * scale);
   wing.rotation.set(0.45, -0.32, 0.72); g.add(wing);
+  // Cracked translucent cockpit visor + sheared tail stabilizer + distress beacon
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(1.4 * scale, 8, 6, 0, TAU, 0, Math.PI * 0.5), toonMat(0x284e66, { emissive: 0x3ea0c8, emissiveIntensity: 0.55, flat: true }));
+  canopy.scale.set(1.4, 0.72, 0.95);
+  canopy.position.set(2.4 * scale, 2.9 * scale, 0);
+  canopy.rotation.z = 0.28; g.add(canopy);
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.42 * scale, 4.6 * scale, 2.2 * scale), wingMat);
+  fin.position.set(-4.2 * scale, 3.2 * scale, 1.2 * scale);
+  fin.rotation.set(-0.22, 0.18, -0.35); g.add(fin);
   // Broken circular thruster nozzle ring + faint amber distress transponder
   const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(1.35 * scale, 1.65 * scale, 2.2 * scale, 8), darkMat);
   nozzle.rotation.z = Math.PI / 2 + 0.28;
@@ -813,31 +1108,59 @@ function meteorImpactSite(radius, base, top, accent, material = cliffMat) {
   return g;
 }
 
-/* ---------------- waterfall material (cached texture so chunk recycles never leak) -- */
+/* ---------------- high-res painterly waterfall cascade texture (cached) -- */
 let _waterfallTex = null;
 function waterfallTexture() {
   if (_waterfallTex) return _waterfallTex;
+  const W = 256, H = 512;
   const c = document.createElement('canvas');
-  c.width = 128; c.height = 256;
+  c.width = W; c.height = H;
   const g = c.getContext('2d');
-  const grad = g.createLinearGradient(0, 0, 128, 0);
-  grad.addColorStop(0, '#4ca2f0');
-  grad.addColorStop(0.5, '#1b64d4');
-  grad.addColorStop(1, '#4ca2f0');
-  g.fillStyle = grad; g.fillRect(0, 0, 128, 256);
-  for (let i = 0; i < 42; i++) {
-    const x = rand(0, 128), w = rand(3, 13);
-    g.fillStyle = pick(['#4da0f5', '#82ccff', '#e8f9ff', '#ffffff']);
-    g.globalAlpha = rand(0.45, 0.96);
-    const y = rand(0, 256), h = rand(36, 130);
+  // Deep cobalt-sapphire vertical torrent core with soft misty feathered alpha edges (STAR_FOX_1.jpeg)
+  const grad = g.createLinearGradient(0, 0, W, 0);
+  grad.addColorStop(0.00, 'rgba(130, 215, 255, 0.00)');
+  grad.addColorStop(0.10, 'rgba(65, 162, 240, 0.68)');
+  grad.addColorStop(0.26, 'rgba(24, 102, 216, 0.94)');
+  grad.addColorStop(0.50, 'rgba(16, 76, 192, 0.98)');
+  grad.addColorStop(0.74, 'rgba(24, 102, 216, 0.94)');
+  grad.addColorStop(0.90, 'rgba(65, 162, 240, 0.68)');
+  grad.addColorStop(1.00, 'rgba(130, 215, 255, 0.00)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, W, H);
+
+  // Layered falling cascade curtains & luminous froth ribbons (seamless vertically)
+  const drawWrappedRibbon = (x, y, w, h, color, alpha) => {
+    g.globalAlpha = alpha;
+    g.fillStyle = color;
     g.fillRect(x, y, w, h);
-    if (y + h > 256) g.fillRect(x, 0, w, y + h - 256);
+    if (y + h > H) g.fillRect(x, 0, w, y + h - H);
+  };
+  for (let i = 0; i < 64; i++) {
+    const u = rand(0.08, 0.92);
+    const edgeFade = Math.sin(u * Math.PI);
+    const x = u * W;
+    const w = rand(3, 14);
+    const y = rand(0, H), h = rand(48, 190);
+    const col = pick(['#2c86e8', '#68c4ff', '#b8ecff', '#eefbff']);
+    drawWrappedRibbon(x, y, w, h, col, rand(0.32, 0.85) * edgeFade);
+  }
+  // Crisp bright white sunlit foam chutes & fine water mist streaks
+  for (let i = 0; i < 52; i++) {
+    const u = rand(0.12, 0.88);
+    const edgeFade = Math.sin(u * Math.PI);
+    const x = u * W;
+    const w = rand(1.5, 4.5);
+    const y = rand(0, H), h = rand(26, 115);
+    drawWrappedRibbon(x, y, w, h, '#ffffff', rand(0.42, 0.92) * edgeFade);
   }
   g.globalAlpha = 1;
   const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, 2.2);
   tex.colorSpace = THREE.SRGBColorSpace;
-  _waterfallTex = tex;
+  tex.anisotropy = 4;
+  _waterfallTex = markShared(tex);
   return tex;
 }
 
@@ -856,6 +1179,7 @@ export class Terrain {
     this.rotors = [];          // chunk-owned rotating radar dishes & beacon rings
     this.naturalEffects = [];  // chunk-owned visual phenomena; transform-only update
     this.time = 0;
+    this.waterScroll = 0;      // world-space scroll distance so ocean & river rush cleanly past the cockpit
     // Decorative transforms can run below gameplay rate. Chunk movement and
     // collision logic remain full-rate so controls and route safety are unchanged.
     this._ambientAccumulator = 0;
@@ -1032,11 +1356,14 @@ export class Terrain {
     return mark;
   }
 
-  _updateWater(dt) {
+  _updateWater(dt, scrollSpeed = 46) {
     if (!this.zone) return;
-    // All liquid surfaces share a compact, time-driven shader. Updating four
-    // uniforms is cheaper than mutating another full grid of vertices.
-    for (const mat of FLUID_MATS) mat.uniforms.uTime.value = this.time;
+    this.waterScroll += scrollSpeed * dt;
+    // All liquid surfaces share a compact, time- and flight-scroll-driven shader.
+    for (const mat of FLUID_MATS) {
+      mat.uniforms.uTime.value = this.time;
+      mat.uniforms.uScroll.value = this.waterScroll;
+    }
     const vis = !!this.zone.water;
     this.water.visible = vis;
     this.glint.visible = vis && this.zone.id === 'sea';
@@ -1053,10 +1380,11 @@ export class Terrain {
         const cd = this._waterDeep, cs = this._waterShallow;
         const dr = cs.r - cd.r, dg = cs.g - cd.g, db = cs.b - cd.b;
         const zOffset = this.water.position.z;
+        const wScroll = this.waterScroll;
         for (let i = 0, j = 0; i < pos.length; i += 3, j += 3) {
-          const x = pos[i], z = pos[i + 2] - zOffset;
-          const h = Math.sin(x * 0.045 + t * 1.4) * 0.7 + Math.sin(z * 0.05 + t * 0.9 + x * 0.02) * 0.8
-            + Math.sin((x + z) * 0.021 + t * 0.6) * 0.5;
+          const x = pos[i], z = pos[i + 2] - zOffset - wScroll;
+          const h = Math.sin(x * 0.045 + t * 1.4) * 0.7 + Math.sin(z * 0.05 - t * 0.9 + x * 0.02) * 0.8
+            + Math.sin((x + z) * 0.021 - t * 0.6) * 0.5;
           pos[i + 1] = h;
           const k = clamp(h * 0.38 + 0.5, 0, 1);
           col[j] = cd.r + dr * k; col[j + 1] = cd.g + dg * k; col[j + 2] = cd.b + db * k;
@@ -1105,6 +1433,12 @@ export class Terrain {
       this.waterMat.uniforms.uShallow.value.set(zone.water.shallow);
       if (zone.water.glint) this.glint.material.color.set(zone.water.glint);
     }
+    if (zone.sun?.pos) {
+      const sp = zone.sun.pos;
+      const sx = sp[0], sy = Math.max(0.14, sp[1]), sz = sp[2];
+      const inv = 1 / Math.hypot(sx, sy, sz);
+      for (const mat of FLUID_MATS) mat.uniforms.uSunDir.value.set(sx * inv, sy * inv, sz * inv);
+    }
     this.floorMaterial = FLOOR_MATS[zone.id] ?? null;
     this.underlay.visible = !zone.water;
     if (zone.ground) this.underlayMat.color.set(zone.ground.base);
@@ -1113,14 +1447,20 @@ export class Terrain {
       this.underlayMat.map = this.floorMaterial.map;
       this.underlayMat.normalMap = this.floorMaterial.normalMap;
       this.underlayMat.normalScale.copy(this.floorMaterial.normalScale);
+      this.underlayMat.emissiveMap = this.floorMaterial.emissiveMap ?? null;
+      this.underlayMat.emissive.setHex(this.floorMaterial.emissiveMap ? 0xff5a22 : 0x000000);
+      this.underlayMat.emissiveIntensity = this.floorMaterial.emissiveMap ? 0.44 : 0;
       this.underlayMat.needsUpdate = true;
     } else if (this.underlayMat.map) {
       this.underlayMat.map = null; this.underlayMat.normalMap = null;
+      this.underlayMat.emissiveMap = null; this.underlayMat.emissive.setHex(0x000000);
+      this.underlayMat.emissiveIntensity = 0;
       this.underlayMat.needsUpdate = true;
     }
     // Population is deliberately deferred to setStage(). Game applies both in
     // sequence, so this avoids rebuilding every chunk twice at each Wave change.
     this.cliffMaterial = CLIFF_MATS[zone.id] ?? cliffMat;
+    _activeCliffMat = this.cliffMaterial;
     this._zoneChanged = prev?.id !== zone.id;
   }
 
@@ -1194,9 +1534,9 @@ export class Terrain {
   /** trace a torus arc (rim of a ring / span of an arch) with a chain of small
    *  overlapping colliders, leaving the central opening passable */
   _torusColliders(chunk, cx0, cy0, czLocal, R, tube, a0, a1, rotZ, damage, isStructure = false) {
-    const rh = Math.max(tube + 3, 8);
+    const rh = isStructure ? Math.max(tube + 1.4, 4.2) : Math.max(tube + 3, 8);
     const arcLen = R * Math.abs(a1 - a0);
-    const samples = clamp(Math.round(arcLen / (rh * 1.05)), 6, 24);
+    const samples = clamp(Math.round(arcLen / (rh * 1.15)), 6, 28);
     const cosR = Math.cos(rotZ), sinR = Math.sin(rotZ);
     for (let i = 0; i <= samples; i++) {
       const a = a0 + (a1 - a0) * (i / samples);
@@ -1254,9 +1594,18 @@ export class Terrain {
     }
     this._routeMarkers(chunk, z);
     const chunkOrd = Math.abs(Math.round(chunk.userData.virtualZ / CHUNK_LEN));
-    const hasSetpiece = (chunkOrd % 5) === this.stageVariant;
+    // Revived medium-scale artificial 3D architecture right along & spanning the course
+    // while strictly preserving a wide, passable central flight corridor!
+    const hasSetpiece = (chunkOrd % 3) === this.stageVariant;
     if (hasSetpiece) this._stageSetpiece(chunk, z);
-    else if (chunkOrd % 4 === 1) this._complexProp(chunk, z);
+    // Dedicated course-shoulder fortified outpost / relay rig every other chunk
+    if (chunkOrd % 2 === 0) this._courseOutpost(chunk, z);
+    // Thrilling fly-through tactical ring gate OR overhead steel gantry spanning the course!
+    if (chunkOrd % 3 === ((this.stageVariant + 1) % 3)) {
+      this._courseSpanStructure(chunk, z, chunkOrd);
+    } else if (!hasSetpiece && chunkOrd % 2 === 1) {
+      this._complexProp(chunk, z);
+    }
     this._zonePhenomena(chunk, z);
     this._autoCollideChunk(chunk);
   }
@@ -1387,23 +1736,27 @@ export class Terrain {
     }
   }
 
-  /** One intricate, solid-collidable engineered landmark spaced generously outside the flight corridor. */
+  /** One intricate, solid-collidable engineered landmark framing the mid-flank cleanly outside the flight lane. */
   _stageSetpiece(chunk, z) {
     const route = flightRoute(z.id, chunk.userData.virtualZ - CHUNK_LEN * 0.52);
     const side = ((Math.abs(Math.floor(chunk.userData.virtualZ / CHUNK_LEN)) + this.stage) % 2) ? 1 : -1;
-    const x = route.center + side * (route.halfWidth + rand(178, 245));
+    // Scaled to a sleek 0.76x footprint and positioned inside the visible canyon/sea flanks!
+    const spScale = 0.76;
+    const x = route.center + side * (route.halfWidth + rand(62, 102));
     const localZ = -CHUNK_LEN * rand(0.32, 0.72);
     const rotY = side * rand(-0.24, 0.24);
     const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
     const g = new THREE.Group();
     g.position.set(x, 0, localZ);
     g.rotation.y = rotY;
+    g.scale.setScalar(spScale);
     g.userData.noCollide = true; // tight per-volume structural colliders registered via addSolid() below
 
     const addSolid = (lx, ly, lz, rh, hy, dmg = 18) => {
-      const wx = x + lx * cosY + lz * sinY;
-      const wz = localZ - lx * sinY + lz * cosY;
-      this._addCollider(chunk, wx, ly, wz, rh, hy, dmg, true);
+      const sx = lx * spScale, sy = ly * spScale, sz = lz * spScale;
+      const wx = x + sx * cosY + sz * sinY;
+      const wz = localZ - sx * sinY + sz * cosY;
+      this._addCollider(chunk, wx, sy, wz, rh * spScale, hy * spScale, dmg, true);
     };
 
     // Stage landmarks use panel-plated / window-grid toon materials with a subtle
@@ -1810,10 +2163,12 @@ export class Terrain {
     const coastOrdinal = Math.abs(Math.round(chunk.userData.virtualZ / CHUNK_LEN));
     if (coastOrdinal % 3 === this.stageVariant) {
       const side = coastOrdinal % 2 ? 1 : -1;
-      const arch = naturalStoneArch(rand(92, 128), rand(86, 120), z.rock.base, z.rock.top, this.cliffMaterial);
+      const aw = rand(92, 128), ah = rand(86, 120);
+      const arch = naturalStoneArch(aw, ah, z.rock.base, z.rock.top, this.cliffMaterial);
       arch.position.set(side * rand(285, 420), -1.5, -rand(76, CHUNK_LEN - 54));
       arch.rotation.y = side * rand(-0.36, 0.36);
       chunk.add(arch);
+      this._addNaturalArchColliders(chunk, arch, 18);
     }
     if (coastOrdinal % 3 === (this.stageVariant + 2) % 3) {
       this._scenicOverheadArch(chunk, z, -CHUNK_LEN * 0.55);
@@ -1823,8 +2178,8 @@ export class Terrain {
     if (coastOrdinal % 3 === (this.stageVariant + 1) % 3) {
       const side = coastOrdinal % 2 ? -1 : 1;
       const fallW = rand(18, 32), fallH = rand(52, 86);
-      const tex = waterfallTexture(); tex.repeat.set(1, fallH / 44);
-      const mat = new THREE.MeshToonMaterial({ map: tex, gradientMap: toonGradient(), transparent: true, opacity: 0.78, depthWrite: false, side: THREE.DoubleSide });
+      const tex = waterfallTexture();
+      const mat = new THREE.MeshToonMaterial({ map: tex, gradientMap: toonGradient(), transparent: true, opacity: 0.86, depthWrite: false, side: THREE.DoubleSide, emissive: 0x2c86c8, emissiveIntensity: 0.22 });
       mat.chunk = chunk; this.waterfallMats.push(mat);
       const fall = new THREE.Mesh(new THREE.PlaneGeometry(fallW, fallH), mat);
       const fallX = side * rand(352, 424), fallZ = -rand(52, CHUNK_LEN - 48);
@@ -1847,15 +2202,22 @@ export class Terrain {
 
   /* ================= GORGE ================= */
   _popGorge(chunk, z) {
-    // Sunlit sandstone canyon walls closer to the flanks for exhilarating ravine scale (STAR_FOX_1.jpeg)
+    // Sunlit sandstone canyon walls curve gracefully along the winding river corridor (STAR_FOX_1.jpeg)
     for (let side = -1; side <= 1; side += 2) {
       let zz = 0;
       while (zz < CHUNK_LEN) {
-        const w = rand(36, 62), h = rand(105, 210);
-        const x = side * rand(210, 290);
+        const route = flightRoute(z.id, chunk.userData.virtualZ - zz);
+        const w = rand(36, 58), h = rand(105, 210);
+        const x = route.center + side * rand(235, 315);
         const rock = buttressedCliff(w, h, z.rock.base, z.rock.top, { layers: pick([3, 4]), material: this.cliffMaterial });
         rock.position.set(x, 0, -zz);
         chunk.add(rock);
+        // Bright shoreline river-foam collar hugging canyon cliffs without expanding cliff colliders (STAR_FOX_1.jpeg!)
+        const cliffFoam = new THREE.Mesh(new THREE.RingGeometry(w * 1.18, w * 1.54, 18), gorgeFoamMat);
+        cliffFoam.rotation.x = -Math.PI / 2;
+        cliffFoam.position.set(x, 1.45, -zz);
+        cliffFoam.userData.noCollide = true;
+        chunk.add(cliffFoam);
         if (Math.random() < 0.85) {
           const moss = mossLedge(w * rand(0.84, 1.2), z.rock.moss);
           moss.position.set(x + rand(-6, 6), h * 0.3 + h * 0.5 - rand(2, 8), -zz);
@@ -1866,12 +2228,11 @@ export class Terrain {
             chunk.add(tree);
           }
         }
-        // Cascading waterfall + animated plunge spray & glowing foam collar
+        // Cascading waterfall + animated plunge spray & multi-layered foaming splash collar
         if (Math.random() < 0.65) {
           const fw = rand(14, 28), fh = h * rand(0.74, 0.96);
           const tex = waterfallTexture();
-          tex.repeat.set(1, fh / 38);
-          const mat = new THREE.MeshToonMaterial({ map: tex, gradientMap: toonGradient(), transparent: true, opacity: 0.94, emissive: 0x4ca8e8, emissiveIntensity: 0.25 });
+          const mat = new THREE.MeshToonMaterial({ map: tex, gradientMap: toonGradient(), transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide, emissive: 0x3b9ee6, emissiveIntensity: 0.28 });
           mat.chunk = chunk;
           this.waterfallMats.push(mat);
           const fall = new THREE.Mesh(new THREE.PlaneGeometry(fw, fh), mat);
@@ -1879,14 +2240,19 @@ export class Terrain {
           fall.rotation.y = side > 0 ? -Math.PI / 2 * 0.92 : Math.PI / 2 * 0.92;
           fall.userData.noCollide = true;
           chunk.add(fall);
-          const foam = new THREE.Mesh(new THREE.CylinderGeometry(fw * 0.82, fw * 1.15, 2.0, 12),
-            toonMat(0xeefcff, { transparent: true, opacity: 0.88, emissive: 0x9eeeff, emissiveIntensity: 0.28, flat: true }));
+          const foam = new THREE.Mesh(new THREE.CylinderGeometry(fw * 0.84, fw * 1.22, 2.2, 14),
+            toonMat(0xf0fdff, { transparent: true, opacity: 0.90, emissive: 0xaef4ff, emissiveIntensity: 0.34, flat: true }));
           foam.position.set(fall.position.x - side * 2.5, 1.2, -zz);
           foam.userData.noCollide = true;
           chunk.add(foam);
-          const spray = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTexture(), color: 0xe6fbff, transparent: true, opacity: 0.48, depthWrite: false, fog: true }));
-          spray.position.set(fall.position.x - side * 4, 8.5, -zz);
-          spray.scale.set(fw * 2.2, fw * 1.1, 1);
+          const splashRing = new THREE.Mesh(new THREE.RingGeometry(fw * 1.12, fw * 1.68, 16), gorgeFoamMat);
+          splashRing.rotation.x = -Math.PI / 2;
+          splashRing.position.set(fall.position.x - side * 2.5, 1.55, -zz);
+          splashRing.userData.noCollide = true;
+          chunk.add(splashRing);
+          const spray = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTexture(), color: 0xeafcff, transparent: true, opacity: 0.54, depthWrite: false, fog: true }));
+          spray.position.set(fall.position.x - side * 4, 9.5, -zz);
+          spray.scale.set(fw * 2.5, fw * 1.25, 1);
           spray.userData.noCollide = true;
           chunk.add(spray);
         }
@@ -1912,6 +2278,7 @@ export class Terrain {
       const crownMoss = mossLedge(rand(16, 26), z.rock.moss);
       crownMoss.position.set(0, rand(56, 78), 0); arch.add(crownMoss);
       chunk.add(arch);
+      this._addNaturalArchColliders(chunk, arch, 18);
     }
     // mid-field stone pillars the player must weave between (collidable)
     for (let row = 0; row < 3; row++) {
@@ -1921,6 +2288,16 @@ export class Terrain {
         const pillar = makeRock(w, h, z.rock.base, z.rock.top, pick([6, 7]));
         pillar.position.set(x, h * 0.3, cz);
         this._obstacle(chunk, pillar, w * 1.15, 18);
+        // Wet river-rock waterline footing & bright white current collar around mid-river pillars (STAR_FOX_1.jpeg)
+        const wetBase = new THREE.Mesh(new THREE.CylinderGeometry(w * 1.02, w * 1.16, 4.2, 8), gorgeWetMat);
+        wetBase.position.set(x, 1.4, cz);
+        wetBase.userData.noCollide = true;
+        chunk.add(wetBase);
+        const pillarFoam = new THREE.Mesh(new THREE.RingGeometry(w * 1.06, w * 1.42, 16), gorgeFoamMat);
+        pillarFoam.rotation.x = -Math.PI / 2;
+        pillarFoam.position.set(x, 1.35, cz);
+        pillarFoam.userData.noCollide = true;
+        chunk.add(pillarFoam);
         if (Math.random() < 0.7) {
           const moss = mossLedge(w * 1.05, z.rock.moss);
           moss.position.set(x, h * 0.3 + h * 0.5 - 4, cz);
@@ -1954,12 +2331,13 @@ export class Terrain {
   /* ================= EMBER ================= */
   _popEmber(chunk, z) {
     chunk.add(this._groundStrip(chunk, 1400, 5.5, z.ground.base, z.ground.lit, null, this.floorMaterial ?? emberGroundMat));
-    // Dramatic volcanic canyon walls with glowing fins closer to the corridor (STAR_FOX_2.jpeg)
+    // Dramatic volcanic canyon walls curve naturally alongside the flight route (STAR_FOX_2.jpeg)
     for (let side = -1; side <= 1; side += 2) {
       let zz = 0;
       while (zz < CHUNK_LEN) {
-        const w = rand(32, 56), h = rand(110, 225);
-        const x = side * rand(235, 320);
+        const route = flightRoute(z.id, chunk.userData.virtualZ - zz);
+        const w = rand(32, 54), h = rand(110, 225);
+        const x = route.center + side * rand(248, 330);
         const rock = buttressedCliff(w, h, z.rock.base, z.rock.top, { layers: pick([3, 4]), material: this.cliffMaterial });
         rock.position.set(x, 0, -zz);
         chunk.add(rock);
@@ -1999,6 +2377,7 @@ export class Terrain {
         this.glows.push({ chunk, mat: seam.material, base: 0.78, amp: 0.20, off: rand(TAU) });
       }
       chunk.add(arch);
+      this._addNaturalArchColliders(chunk, arch, 18);
     }
     // mid-field jagged towers + glowing crystals (collidable)
     for (let row = 0; row < 3; row++) {
@@ -2045,10 +2424,14 @@ export class Terrain {
         return site;
       }, 17);
     }
-    // scattered floor boulders across the wide floor
+    // scattered floor boulders strictly outside the navigable central lane
     for (let i = 0; i < 8; i++) {
+      const localZ = -rand(16, CHUNK_LEN - 16);
+      const bRoute = flightRoute(z.id, chunk.userData.virtualZ + localZ);
+      const bSide = Math.random() < 0.5 ? -1 : 1;
+      const bx = bRoute.center + bSide * rand(bRoute.halfWidth + 72, FIELD * 1.15);
       const r = makeRock(rand(3, 9), rand(6, 18), 0x241522, 0x53303a, 6);
-      r.position.set(rand(-FIELD, FIELD), 2, -rand(0, CHUNK_LEN));
+      r.position.set(bx, 2, localZ);
       chunk.add(r);
     }
     // distant jagged silhouettes
@@ -2148,6 +2531,7 @@ export class Terrain {
       arch.position.set(side * rand(450, 600), -2, -rand(54, CHUNK_LEN - 48));
       arch.rotation.y = side * rand(-0.30, 0.30);
       chunk.add(arch);
+      this._addNaturalArchColliders(chunk, arch, 18);
       const dryWash = new THREE.Mesh(new THREE.PlaneGeometry(rand(46, 72), rand(86, 142), 8, 10), toonMat(0x7c6d5c, { transparent: true, opacity: 0.34, flat: true }));
       dryWash.rotation.x = -Math.PI / 2;
       dryWash.position.set(side * rand(260, 330), 0.18, -rand(58, CHUNK_LEN - 54));
@@ -2167,10 +2551,31 @@ export class Terrain {
     this._aerialLayer(chunk, z);
   }
 
+  /** Register exact solid rim + pier colliders for a placed `naturalStoneArch` while keeping its opening passable. */
+  _addNaturalArchColliders(chunk, arch, damage = 18) {
+    const spec = arch?.userData?.archSpec;
+    if (!spec) return;
+    const ax0 = arch.position.x, ay0 = arch.position.y, az0 = arch.position.z;
+    if (Math.abs(ax0) > COLLIDE_REACH + spec.spanR) return;
+    const cosY = Math.cos(arch.rotation.y), sinY = Math.sin(arch.rotation.y);
+    const addRot = (lx, ly, lz, rh, hy) => {
+      const wx = ax0 + lx * cosY + lz * sinY;
+      const wz = az0 - lx * sinY + lz * cosY;
+      this._addCollider(chunk, wx, ay0 + ly, wz, rh, hy, damage, false);
+    };
+    for (const side of [-1, 1]) {
+      addRot(side * spec.spanR, spec.legH * 0.34, 0, spec.legR * 1.12, spec.legH * 0.44);
+    }
+    for (const s of spec.stonePoints) {
+      addRot(s.x, s.y, s.z, s.rh, s.hy);
+    }
+  }
+
   /**
-   * Towering, purely scenic (noCollide) natural stone arch spanning HIGH over the
-   * flight corridor (opening clearance > 105 units high & > 220 units wide).
-   * Gives exhilarating Star Fox 3D depth & speed parallax without ever blocking flight!
+   * Towering stone-chain natural arch spanning HIGH over the flight corridor
+   * (opening clearance > 110 units high & > 240 units wide).
+   * Every chained stone block & both massive piers have SOLID colliders so shots,
+   * player, and wingmates collide accurately with the stone rim while flying cleanly through the open span!
    */
   _scenicOverheadArch(chunk, z, zpos) {
     const route = flightRoute(z.id, chunk.userData.virtualZ + zpos);
@@ -2178,7 +2583,7 @@ export class Terrain {
     const R = rand(142, 168);
     const tube = rand(14, 20);
     const root = new THREE.Group();
-    root.userData.noCollide = true;
+    root.userData.noCollide = true; // tight per-stone & per-pier colliders registered explicitly below
     const material = this.cliffMaterial ?? stableCliffMaterial(z.id);
 
     const segments = 12;
@@ -2187,13 +2592,25 @@ export class Terrain {
       const a = Math.PI * t;
       const ax = cx + Math.cos(a) * R, ay = 8 + Math.sin(a) * R * 0.88, az = zpos + Math.sin(a * 2) * 5;
       const rock = makeCliffRock(
-        tube * rand(0.86, 1.18),
+        tube * rand(0.88, 1.18),
         tube * rand(1.9, 2.6),
         z.rock.base, z.rock.top, 8, material
       );
       rock.position.set(ax, ay, az);
       rock.rotation.set(rand(-0.14, 0.14), a + Math.PI / 2, rand(-0.22, 0.22));
       root.add(rock);
+      // Solid per-stone collider along the arch rim (central corridor stays 100% open & fly-throughable!)
+      this._addCollider(chunk, ax, ay, az, tube * 1.06, tube * 1.15, 18, false);
+      // Interlocking secondary wedge stone between consecutive primary blocks for crisp natural stonework
+      if (i < segments) {
+        const aMid = Math.PI * ((i + 0.5) / segments);
+        const mx = cx + Math.cos(aMid) * (R + tube * 0.22);
+        const my = 8 + Math.sin(aMid) * (R + tube * 0.22) * 0.88;
+        const wedge = makeCliffRock(tube * 0.62, tube * 1.15, z.rock.base, z.rock.top, 7, material);
+        wedge.position.set(mx, my, zpos + Math.sin(aMid * 2) * 5 + rand(-3, 3));
+        wedge.rotation.set(rand(-0.2, 0.2), aMid + Math.PI / 2, rand(-0.3, 0.3));
+        root.add(wedge);
+      }
       // Hanging underside stalactite stone teeth & upper crown ledges give rich silhouette under the arch
       if (i >= 2 && i <= segments - 2 && i % 2 === 0) {
         const tooth = new THREE.Mesh(new THREE.ConeGeometry(tube * rand(0.28, 0.46), tube * rand(1.1, 1.8), 6), material);
@@ -2206,6 +2623,8 @@ export class Terrain {
       const foot = buttressedCliff(tube * 1.65, R * 0.48, z.rock.base, z.rock.top, { layers: 3, material });
       foot.position.set(cx + side * R * 1.02, 0, zpos);
       root.add(foot);
+      // Solid pier collider anchoring both arch legs into the ground/sea
+      this._addCollider(chunk, cx + side * R * 1.02, R * 0.24, zpos, tube * 1.62, R * 0.28, 18, false);
       if (z.id === 'sea') {
         const foam = new THREE.Mesh(new THREE.RingGeometry(tube * 2.1, tube * 3.1, 16), seaFoamMat);
         foam.rotation.x = -Math.PI / 2; foam.position.set(cx + side * R * 1.02, 1.9, zpos);
@@ -2216,6 +2635,16 @@ export class Terrain {
         beacon.position.set(cx + side * R * 0.88, 34, zpos + 8);
         root.add(beacon);
         this.glows.push({ chunk, mat: bMat, base: 1.5, amp: 0.5, off: side });
+      } else if (z.id === 'gorge') {
+        // Cascading canyon waterfall ribbon pouring down the arch shoulder!
+        const fh = R * 0.46;
+        const tex = waterfallTexture();
+        const wfMat = new THREE.MeshToonMaterial({ map: tex, gradientMap: toonGradient(), transparent: true, opacity: 0.86, emissive: 0x5cc4f5, emissiveIntensity: 0.22, depthWrite: false, side: THREE.DoubleSide });
+        wfMat.chunk = chunk; this.waterfallMats.push(wfMat);
+        const fall = new THREE.Mesh(new THREE.PlaneGeometry(14, fh), wfMat);
+        fall.position.set(cx + side * (R * 0.84), fh * 0.5 + 1, zpos + 4);
+        fall.rotation.y = side > 0 ? -Math.PI * 0.42 : Math.PI * 0.42;
+        root.add(fall);
       }
     }
     if (z.rock.moss) {
@@ -2502,7 +2931,7 @@ export class Terrain {
     }
   }
 
-  /** Fortified multi-tier watchtower / sky-citadel — solid collidable at every tier with window grids, buttress wings & rotating radar */
+  /** Fortified multi-tier watchtower / sky-citadel — medium-scale solid collidable with window grids, buttress wings & rotating radar */
   _megaTower(chunk, z, x, cz) {
     const accent = z.rock.glow ?? (z.id === 'sea' ? 0x7be8ff : z.id === 'gorge' ? 0x9deaff : 0xffd77a);
     const steelCol = z.id === 'ember' ? 0x452b37 : z.id === 'sea' ? 0x32526a : 0x5c554c;
@@ -2510,11 +2939,11 @@ export class Terrain {
     winMat.emissiveMap = terrainWindowTex;
     const armorMat = toonMat(steelCol, { map: terrainArmorTex, emissive: steelCol, emissiveIntensity: 0.12, flat: true });
     const darkArmor = toonMat(0x26303d, { map: terrainArmorTex, flat: true });
-    let baseY = -3;
-    let r = rand(17, 23);
-    const tiers = 2 + (Math.random() < 0.5 ? 1 : 0);
+    let baseY = -2;
+    let r = rand(11.5, 15.5);
+    const tiers = 2;
     for (let i = 0; i < tiers; i++) {
-      const h = rand(30, 44);
+      const h = rand(22, 32);
       const seg = new THREE.Mesh(
         new THREE.CylinderGeometry(r * 0.86, r * 1.02, h, 8),
         i === 0 ? armorMat : winMat
@@ -2587,12 +3016,12 @@ export class Terrain {
     this.glows.push({ chunk, mat: beacon.material, base: 1.8, amp: 0.60, off: rand(TAU) });
   }
 
-  /** Engineered tactical ring gate you can fly cleanly through — solid clamped rim, cardinal energy projectors & twin pier bunkers */
-  _ringGate(chunk, z, x, cz) {
-    const R = rand(34, 48);
-    const tube = rand(3.0, 4.4);
-    const ringY = R + rand(6, 28);
-    const rotZ = rand(-0.26, 0.26);
+  /** Engineered tactical ring gate you can fly cleanly through — solid clamped rim, cardinal energy projectors & twin outer pier bunkers */
+  _ringGate(chunk, z, x, cz, onCourse = false) {
+    const R = onCourse ? rand(42, 48) : rand(30, 38);
+    const tube = onCourse ? rand(2.5, 3.1) : rand(2.8, 3.8);
+    const ringY = onCourse ? (R - 2 + rand(0, 6)) : (R + rand(6, 22));
+    const rotZ = onCourse ? rand(-0.10, 0.10) : rand(-0.24, 0.24);
     const accent = z.rock.glow ?? (z.id === 'sea' ? 0x7fe9ff : z.id === 'gorge' ? 0x9deaff : 0xffd77a);
     const ringMat = toonMat(z.id === 'ember' ? 0x452d38 : 0x4b5b6e, { map: terrainArmorTex, emissive: 0x161d28, emissiveIntensity: 0.24, flat: true });
     const darkMat = toonMat(0x28313e, { map: terrainArmorTex, flat: true });
@@ -2615,32 +3044,33 @@ export class Terrain {
     innerTrack.rotation.z = rotZ;
     innerTrack.userData.noCollide = true;
     chunk.add(innerTrack);
-    // solid rim: trace the full ring with structural colliders, leaving the centre passable
-    this._torusColliders(chunk, x, ringY, cz, R, tube, 0, TAU, rotZ, 14, true);
-    // Twin fortified pier foundations with window-grid control bunkers & diagonal brace struts
+    // solid rim: trace the full ring with tight structural colliders, leaving the entire central portal passable
+    this._torusColliders(chunk, x, ringY, cz, R, onCourse ? tube * 0.85 : tube, 0, TAU, rotZ, 14, true);
+    // Twin fortified pier foundations mounted cleanly on the OUTER flanks (never intruding into the fly-through opening!)
+    const pierOffset = onCourse ? 0.98 : 0.84;
     for (const side of [-1, 1]) {
-      const sx = x + side * R * 0.74;
-      const supportH = Math.max(12, ringY * 0.94);
-      const support = new THREE.Mesh(new THREE.CylinderGeometry(tube * 1.65, tube * 2.25, supportH, 8), ringMat);
+      const sx = x + side * R * pierOffset;
+      const supportH = Math.max(12, ringY * (onCourse ? 0.92 : 0.94));
+      const support = new THREE.Mesh(new THREE.CylinderGeometry(tube * 1.55, tube * 2.1, supportH, 8), ringMat);
       support.position.set(sx, supportH * 0.5 - 1, cz);
-      this._obstacle(chunk, support, tube * 2.25, 16, true);
-      // Diagonal structural truss strut reinforcing pier into the ring body
+      this._obstacle(chunk, support, tube * 2.1, 16, true);
+      // Diagonal structural truss strut reinforcing pier outward into the ring shoulder
       const brace = new THREE.Mesh(new THREE.BoxGeometry(tube * 1.1, supportH * 0.55, tube * 1.2), darkMat);
-      brace.position.set(sx + side * tube * 2.6, supportH * 0.34, cz);
+      brace.position.set(sx + side * tube * 2.4, supportH * 0.34, cz);
       brace.rotation.z = side * 0.36;
       brace.userData.noCollide = true;
       chunk.add(brace);
-      const footing = new THREE.Mesh(new THREE.CylinderGeometry(tube * 3.6, tube * 4.5, tube * 1.4, 8), darkMat);
-      footing.position.set(sx, tube * 0.65 - 1, cz);
-      this._obstacle(chunk, footing, tube * 3.8, 14, true);
-      const bunker = new THREE.Mesh(new THREE.BoxGeometry(tube * 3.4, tube * 2.3, tube * 3.6), toonMat(0x364252, { map: terrainArmorTex, flat: true }));
-      bunker.position.set(sx, tube * 2.2, cz + tube * 2.1);
-      this._obstacle(chunk, bunker, tube * 2.2, 14, true);
-      const slit = new THREE.Mesh(new THREE.BoxGeometry(tube * 2.4, tube * 0.5, 0.36), toonMat(0x141e2a, { emissive: accent, emissiveIntensity: 1.4, flat: true }));
-      slit.position.set(sx, tube * 2.45, cz + tube * 3.95);
+      const footing = new THREE.Mesh(new THREE.CylinderGeometry(tube * 3.2, tube * 4.0, tube * 1.4, 8), darkMat);
+      footing.position.set(sx + side * tube * 0.8, tube * 0.65 - 1, cz);
+      this._obstacle(chunk, footing, tube * 3.4, 14, true);
+      const bunker = new THREE.Mesh(new THREE.BoxGeometry(tube * 3.2, tube * 2.3, tube * 3.4), toonMat(0x364252, { map: terrainArmorTex, flat: true }));
+      bunker.position.set(sx + side * tube * 1.1, tube * 2.2, cz + tube * 2.0);
+      this._obstacle(chunk, bunker, tube * 2.1, 14, true);
+      const slit = new THREE.Mesh(new THREE.BoxGeometry(tube * 2.2, tube * 0.5, 0.36), toonMat(0x141e2a, { emissive: accent, emissiveIntensity: 1.4, flat: true }));
+      slit.position.set(sx + side * tube * 1.1, tube * 2.45, cz + tube * 3.75);
       slit.userData.noCollide = true;
       chunk.add(slit);
-      const collar = new THREE.Mesh(new THREE.CylinderGeometry(tube * 2.2, tube * 2.4, tube * 0.7, 8), toonMat(z.rock.top, { flat: true }));
+      const collar = new THREE.Mesh(new THREE.CylinderGeometry(tube * 2.1, tube * 2.3, tube * 0.7, 8), toonMat(z.rock.top, { flat: true }));
       collar.position.set(sx, supportH * 0.74, cz);
       collar.userData.noCollide = true;
       chunk.add(collar);
@@ -2671,16 +3101,203 @@ export class Terrain {
     }
   }
 
-  /** choose a zone-appropriate complex prop and place it well outside the flight corridor */
+  /**
+   * Compact, zone-tailored artificial outpost hugging the visible course edge:
+   * medium-scale (~20-26u footprint) armored platform, illuminated control pod,
+   * rotating radar dish & beacon — clearly readable right beside the flight path
+   * without encroaching on the central flight channel!
+   */
+  _courseOutpost(chunk, z) {
+    const cz = -rand(55, CHUNK_LEN - 55);
+    const route = flightRoute(z.id, chunk.userData.virtualZ + cz);
+    const side = ((Math.abs(Math.floor(chunk.userData.virtualZ / CHUNK_LEN)) + this.stage) % 2) ? -1 : 1;
+    const x = route.center + side * (route.halfWidth + rand(22, 46));
+    const accent = z.rock.glow ?? (z.id === 'sea' ? 0x72eeff : z.id === 'gorge' ? 0x98efff : 0xffd46a);
+    const hullCol = z.id === 'ember' ? 0x4b2b36 : z.id === 'sea' ? 0x355c74 : z.id === 'gorge' ? 0x5c5b52 : 0x74624c;
+    const armorMat = toonMat(hullCol, { map: terrainArmorTex, emissive: hullCol, emissiveIntensity: 0.14, flat: true });
+    const winMat = toonMat(hullCol, { map: terrainWindowTex, emissive: accent, emissiveIntensity: 0.68, flat: true });
+    winMat.emissiveMap = terrainWindowTex;
+    const darkMat = toonMat(0x232d3b, { map: terrainArmorTex, flat: true });
+    const glowMat = toonMat(0x141d2a, { emissive: accent, emissiveIntensity: 1.55, flat: true });
+    const warnMat = toonMat(0x261a10, { emissive: 0xffc852, emissiveIntensity: 1.45, flat: true });
+
+    const g = new THREE.Group();
+    g.position.set(x, 0, cz);
+    g.userData.noCollide = true;
+
+    // Octagonal armored plinth / offshore rig legs
+    const deckY = z.id === 'sea' ? 11.5 : 4.2;
+    if (z.id === 'sea') {
+      for (const sx of [-7.2, 7.2]) for (const sz of [-7.2, 7.2]) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.85, 16, 6), darkMat);
+        leg.position.set(sx, 5.5, sz); g.add(leg);
+      }
+    } else {
+      const plinth = new THREE.Mesh(new THREE.CylinderGeometry(11.5, 13.8, 5.2, 8), darkMat);
+      plinth.position.y = 2.0; g.add(plinth);
+    }
+    const deck = new THREE.Mesh(new THREE.CylinderGeometry(11.8, 12.6, 2.2, 8), armorMat);
+    deck.position.y = deckY; g.add(deck);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(12.2, 0.36, 5, 16), glowMat);
+    rim.rotation.x = Math.PI / 2; rim.position.y = deckY + 1.1; g.add(rim);
+
+    // Multi-story illuminated control tower + zone-specific industrial fixture
+    const keepH = rand(14, 21);
+    const keep = new THREE.Mesh(new THREE.BoxGeometry(9.6, keepH, 8.8), winMat);
+    keep.position.set(-side * 1.4, deckY + 1.1 + keepH * 0.5, 0); g.add(keep);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(10.8, 1.4, 9.8), darkMat);
+    roof.position.set(-side * 1.4, deckY + 1.4 + keepH, 0); g.add(roof);
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(9.9, 1.35, 1.8), glowMat);
+    visor.position.set(-side * 1.4, deckY + keepH * 0.78, 3.8); g.add(visor);
+
+    // Zone-specific sculptural accent (crane / cooling stack / shield coil / hydro conduit)
+    if (z.id === 'ember') {
+      for (const zOff of [-3.2, 3.2]) {
+        const stack = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.3, 18, 8), darkMat);
+        stack.position.set(side * 5.6, deckY + 9.5, zOff); g.add(stack);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(2.05, 0.32, 5, 10), glowMat);
+        ring.rotation.x = Math.PI / 2; ring.position.set(side * 5.6, deckY + 15.8, zOff); g.add(ring);
+      }
+    } else if (z.id === 'dune') {
+      const coilMast = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.8, 16, 6), darkMat);
+      coilMast.position.set(side * 5.5, deckY + 8.5, 0); g.add(coilMast);
+      for (const cy of [9, 13, 17]) {
+        const coil = new THREE.Mesh(new THREE.TorusGeometry(3.2 - (cy - 9) * 0.16, 0.28, 5, 12), glowMat);
+        coil.rotation.x = Math.PI / 2; coil.position.set(side * 5.5, deckY + cy, 0); g.add(coil);
+      }
+    } else {
+      // Compact harbor/gorge crane boom + warning beacon
+      const craneMast = new THREE.Mesh(new THREE.BoxGeometry(1.6, 15, 1.6), darkMat);
+      craneMast.position.set(side * 5.6, deckY + 8.0, 2.2); g.add(craneMast);
+      const boom = new THREE.Mesh(new THREE.BoxGeometry(12.5, 1.1, 1.1), armorMat);
+      boom.position.set(side * 1.2, deckY + 16.5, 2.2); boom.rotation.z = side * -0.22; g.add(boom);
+      const lamp = new THREE.Mesh(new THREE.OctahedronGeometry(1.1, 0), warnMat);
+      lamp.position.set(-side * 4.5, deckY + 17.8, 2.2); g.add(lamp);
+    }
+
+    // Animated rotating radar bar atop the control roof
+    const rotor = new THREE.Group();
+    rotor.position.set(-side * 1.4, deckY + 3.4 + keepH, 0);
+    rotor.add(new THREE.Mesh(new THREE.BoxGeometry(7.2, 1.2, 0.65), armorMat));
+    rotor.add(new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.42, 0.85), glowMat));
+    g.add(rotor);
+    this.rotors.push({ chunk, obj: rotor, speed: 1.05 * side });
+
+    chunk.add(g);
+    // Tight solid cylinder colliders matching lower deck + upper control tower
+    this._addCollider(chunk, x, deckY * 0.55 + 1.0, cz, 12.2, deckY * 0.55 + 1.6, 16, true);
+    this._addCollider(chunk, x, deckY + keepH * 0.52 + 1.2, cz, 8.2, keepH * 0.52 + 1.2, 16, true);
+  }
+
+  /**
+   * Elevated industrial steel gantry bridge spanning cleanly OVER the flight corridor!
+   * Twin fortified pylons stand outside the safe channel (spanW = 148..168), leaving a
+   * huge 124+ wide × 64+ tall fly-under flight portal AND open air above the crossbeam.
+   */
+  _courseGantry(chunk, z, cx, cz) {
+    const spanW = rand(148, 168);
+    const halfSpan = spanW * 0.5;
+    const bridgeY = rand(72, 86);
+    const accent = z.rock.glow ?? (z.id === 'sea' ? 0x72eeff : z.id === 'gorge' ? 0x98efff : 0xffd46a);
+    const hullCol = z.id === 'ember' ? 0x4b2a36 : z.id === 'sea' ? 0x345972 : z.id === 'gorge' ? 0x5d5b52 : 0x76644c;
+    const armorMat = toonMat(hullCol, { map: terrainArmorTex, emissive: hullCol, emissiveIntensity: 0.14, flat: true });
+    const winMat = toonMat(hullCol, { map: terrainWindowTex, emissive: accent, emissiveIntensity: 0.65, flat: true });
+    winMat.emissiveMap = terrainWindowTex;
+    const darkMat = toonMat(0x222c3a, { map: terrainArmorTex, flat: true });
+    const glowMat = toonMat(0x141d2a, { emissive: accent, emissiveIntensity: 1.55, flat: true });
+    const warnMat = toonMat(0x281b10, { emissive: 0xffc852, emissiveIntensity: 1.45, flat: true });
+
+    const g = new THREE.Group();
+    g.position.set(cx, 0, cz);
+    g.userData.noCollide = true;
+
+    // Twin fortified steel support towers anchoring the bridge outside the central lane
+    for (const side of [-1, 1]) {
+      const px = side * halfSpan;
+      const footing = new THREE.Mesh(new THREE.CylinderGeometry(9.5, 12.2, 10, 8), darkMat);
+      footing.position.set(px, 4.5, 0); g.add(footing);
+      const pylon = new THREE.Mesh(new THREE.BoxGeometry(10.4, bridgeY + 12, 11.4), winMat);
+      pylon.position.set(px, (bridgeY + 12) * 0.5, 0); g.add(pylon);
+      for (const rz of [-5.8, 5.8]) {
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(11.6, bridgeY + 10, 1.4), darkMat);
+        rib.position.set(px, (bridgeY + 10) * 0.5, rz); g.add(rib);
+      }
+      // Inward diagonal knee-brace supporting overhead truss
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(2.6, 22, 3.2), darkMat);
+      brace.position.set(px - side * 10.5, bridgeY - 9.5, 0);
+      brace.rotation.z = side * -0.58; g.add(brace);
+      // Rooftop antenna spire & pulsing aviation beacon
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(12.2, 2.6, 13.0), darkMat);
+      cap.position.set(px, bridgeY + 13.0, 0); g.add(cap);
+      const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.85, 14, 6), armorMat);
+      spire.position.set(px, bridgeY + 21, 0); g.add(spire);
+      const lamp = new THREE.Mesh(new THREE.OctahedronGeometry(1.8, 0), warnMat);
+      lamp.position.set(px, bridgeY + 29, 0); g.add(lamp);
+      this.glows.push({ chunk, mat: lamp.material, base: 1.45, amp: 0.52, off: side * 1.2 });
+      // Solid pylon collider (strictly at ±halfSpan = ±74..84 from corridor center)
+      this._addCollider(chunk, cx + px, (bridgeY + 12) * 0.5, cz, 7.6, (bridgeY + 12) * 0.5, 18, true);
+    }
+
+    // Main overhead armored truss deck + illuminated command cabin + approach guide chevrons!
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(spanW + 10, 5.8, 12.2), armorMat);
+    deck.position.set(0, bridgeY, 0); g.add(deck);
+    const upperRail = new THREE.Mesh(new THREE.BoxGeometry(spanW + 4, 1.6, 13.0), darkMat);
+    upperRail.position.set(0, bridgeY + 4.0, 0); g.add(upperRail);
+    const glowTrim = new THREE.Mesh(new THREE.BoxGeometry(spanW - 14, 1.15, 12.8), glowMat);
+    glowTrim.position.set(0, bridgeY - 2.6, 0); g.add(glowTrim);
+
+    // Central sky-bridge command room + spinning radar array atop the crossbeam
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(24, 7.2, 9.6), winMat);
+    cabin.position.set(0, bridgeY + 7.2, 0); g.add(cabin);
+    const cabinRoof = new THREE.Mesh(new THREE.BoxGeometry(26, 1.4, 10.6), darkMat);
+    cabinRoof.position.set(0, bridgeY + 11.4, 0); g.add(cabinRoof);
+    const radar = new THREE.Group();
+    radar.position.set(0, bridgeY + 14.4, 0);
+    radar.add(new THREE.Mesh(new THREE.BoxGeometry(10.5, 1.6, 0.8), armorMat));
+    radar.add(new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.55, 1.0), glowMat));
+    g.add(radar);
+    this.rotors.push({ chunk, obj: radar, speed: 0.9 });
+
+    // Glowing underside portal marker beacons framing the safe fly-under channel
+    for (const bx of [-34, 0, 34]) {
+      const marker = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.9, 1.4), bx === 0 ? glowMat : warnMat);
+      marker.position.set(bx, bridgeY - 3.6, 5.4); g.add(marker);
+    }
+
+    chunk.add(g);
+    // Segmented overhead beam colliders ONLY at bridgeY (entire space below y = bridgeY - 6 is 100% open!)
+    const segs = 7;
+    for (let i = 0; i < segs; i++) {
+      const sx = -halfSpan + ((i + 0.5) / segs) * spanW;
+      this._addCollider(chunk, cx + sx, bridgeY + 0.6, cz, spanW / (segs * 1.8), 4.6, 18, true);
+    }
+  }
+
+  /** Alternate between fly-through Tactical Ring Gates and elevated Steel Gantry Portals along the course! */
+  _courseSpanStructure(chunk, z, chunkOrd) {
+    const cz = -CHUNK_LEN * 0.50;
+    const route = flightRoute(z.id, chunk.userData.virtualZ + cz);
+    if (chunkOrd % 2 === 0) {
+      // Thrilling Star Fox fly-through tactical ring gate centered cleanly along the course!
+      const gx = route.center + rand(-10, 10);
+      this._ringGate(chunk, z, gx, cz, true);
+    } else {
+      // Elevated industrial gantry bridge you can roar right underneath or over!
+      this._courseGantry(chunk, z, route.center, cz);
+    }
+  }
+
+  /** Choose a zone-appropriate complex artificial tower/gate flanking the visible course edge */
   _complexProp(chunk, z) {
     const side = Math.random() < 0.5 ? -1 : 1;
     const cz = -rand(45, CHUNK_LEN - 45);
     const route = flightRoute(z.id, chunk.userData.virtualZ + cz);
-    const isTower = z.id === 'sea' || Math.random() < 0.55;
-    const offset = isTower ? rand(142, 215) : rand(158, 228);
+    const isTower = z.id === 'sea' || Math.random() < 0.62;
+    // Close enough to stand boldly inside the player's forward sightline & inside canyon walls!
+    const offset = isTower ? rand(26, 62) : rand(44, 82);
     const x = route.center + side * (route.halfWidth + offset);
     if (isTower) this._megaTower(chunk, z, x, cz);
-    else this._ringGate(chunk, z, x, cz);
+    else this._ringGate(chunk, z, x, cz, false);
   }
 
   _groundStrip(chunk, width, amp, cShade, cLit, cMid = null, mat = rockMat) {
@@ -2753,7 +3370,7 @@ export class Terrain {
         if (o.userData.float) o.position.y = o.userData.float.y0 + Math.sin(this.time * 0.6 + o.userData.float.off) * 3;
       }
     }
-    if (animateAmbient && _waterfallTex && this.waterfallMats.length) _waterfallTex.offset.y += ambientDt * 1.6;
+    if (animateAmbient && _waterfallTex && this.waterfallMats.length) _waterfallTex.offset.y += ambientDt * 2.05;
     if (animateAmbient) for (const fx of this.naturalEffects) {
       const u = this.time * fx.speed + fx.phase;
       const pulse = 0.5 + 0.5 * Math.sin(u);
@@ -2821,6 +3438,6 @@ export class Terrain {
       mark.material.opacity = u.op * Math.min(1, k * 2.4) * (0.35 + k * 0.65) * pulse;
       if (mark.position.z > 95) { mark.visible = false; mark.material.opacity = 0; }
     }
-    this._updateWater(dt);
+    this._updateWater(dt, scrollSpeed);
   }
 }

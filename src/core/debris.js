@@ -18,7 +18,14 @@ export class Debris {
     this.ready = false;
     this.budgetScale = 1.0;
     this._head = 0;
-    this.frags = [];          // normalised geometries
+    this.frags = [
+      // Immediate crisp procedural spacecraft shrapnel (armor plates, twisted girders & wing shards)
+      new THREE.BoxGeometry(1.7, 0.22, 1.1),
+      new THREE.BoxGeometry(1.9, 0.34, 0.34),
+      new THREE.ConeGeometry(0.85, 1.75, 3),
+      new THREE.CylinderGeometry(0.32, 0.48, 1.5, 6),
+    ];
+    this.ready = true;
     this.active = [];
     this.pool = [];
 
